@@ -516,6 +516,22 @@ class TestEnvFile(unittest.TestCase):
         self.assertRaises(IOError, load_env_file,
                           os.path.join(self.dir, 'absent.sh'))
 
+    def test_tilde_is_expanded(self):
+        # from_env_file used to expand and load_env_file did not, which
+        # made the same path work through one entry point and not the
+        # other.
+        self.assertRaises(IOError, load_env_file, '~/no_such_env_file_xyzzy')
+
+    def test_script_clears_every_variable_it_reads(self):
+        # A name added to the constants but not to the unset list would
+        # let the caller's environment show through as the file's.
+        import sqlplus_session.session as _s
+        first = _s._ENV_FILE_SCRIPT.splitlines()[0].split()
+        self.assertEqual(first[0], 'unset')
+        for name in (_s.ENV_USERNAME, _s.ENV_PASSWORD) + tuple(_s.ENV_CONNECT):
+            self.assertIn(name, first[1:])
+            self.assertIn(name, _s._ENV_FILE_SCRIPT.splitlines()[-1])
+
     def test_unsourceable_file_raises(self):
         p = self.write('exit 7\n')
         self.assertRaises(ValueError, load_env_file, p)

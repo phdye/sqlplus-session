@@ -125,23 +125,36 @@ def resolve_credentials(username, password, connect_string):
             env_connect if connect_string is None else connect_string)
 
 
+def _connect_expansion():
+    """``${A:-${B:-$C}}`` built from ENV_CONNECT.
+
+    Composed rather than written out, so adding a name to ENV_CONNECT
+    cannot leave the shell script consulting the old list.
+    """
+    expr = '$' + ENV_CONNECT[-1]
+    for name in reversed(ENV_CONNECT[:-1]):
+        expr = '${%s:-%s}' % (name, expr)
+    return expr
+
+
 # Sourced in a subshell, which then prints back only the three values we
 # asked for.  Sourcing rather than parsing matters: an environment file
 # that computes its values, or that defers to another file, is common and
 # a line-by-line parser gets it wrong.  NUL separators because a password
 # is allowed to contain anything, newlines included.
 #
-# The five variables are unset before the file is sourced, so what comes
-# back is what the file provides and not whatever the caller happened to
-# have exported.  Without that, this function's answer depends on ambient
+# The credential variables are unset before the file is sourced, so what
+# comes back is what the file provides and not whatever the caller
+# happened to have exported.  Without that, the answer depends on ambient
 # state, which is the kind of thing that works on one box and not the
 # next.  A caller wanting file-over-environment merges the two itself;
 # credentials_from_environment() is right there.
 _ENV_FILE_SCRIPT = (
-    'unset DB_USERNAME DB_PASSWORD DB_NAME TWO_TASK ORACLE_SID\n'
+    'unset %s\n'
     '. "$1" >/dev/null 2>&1 || exit 3\n'
-    'printf "%s\\0%s\\0%s\\0" "$DB_USERNAME" "$DB_PASSWORD" '
-    '"${DB_NAME:-${TWO_TASK:-$ORACLE_SID}}"\n'
+    'printf "%%s\\0%%s\\0%%s\\0" "$%s" "$%s" "%s"\n'
+    % (' '.join((ENV_USERNAME, ENV_PASSWORD) + tuple(ENV_CONNECT)),
+       ENV_USERNAME, ENV_PASSWORD, _connect_expansion())
 )
 
 
@@ -159,14 +172,21 @@ def load_env_file(path, shell='/bin/sh'):
     Raises ``IOError`` if *path* is not there and ``ValueError`` if the
     shell cannot source it.
     """
+    path = os.path.expanduser(path)
     if not os.path.isfile(path):
         raise IOError('no such environment file: %s' % path)
+    # os.devnull rather than subprocess.DEVNULL, which is 3.3+, and
+    # rather than a pipe nobody reads: an environment file that chatters
+    # on stderr would fill the buffer and hang.
+    devnull = open(os.devnull, 'w')
     try:
         out = subprocess.check_output(
             [shell, '-c', _ENV_FILE_SCRIPT, 'sqlplus-session', path],
-            stderr=subprocess.PIPE)
+            stderr=devnull)
     except (OSError, subprocess.CalledProcessError) as exc:
         raise ValueError('cannot source %s: %s' % (path, exc))
+    finally:
+        devnull.close()
     parts = out.decode('utf-8', 'replace').split('\0')
     while len(parts) < 3:
         parts.append('')
@@ -436,7 +456,7 @@ class SqlplusSession(object):
             with SqlplusSession.from_env_file('~/.dbenv') as s:
                 ...
         """
-        user, pw, connect = load_env_file(os.path.expanduser(path), shell)
+        user, pw, connect = load_env_file(path, shell)
         return cls(user, pw, connect, **kwargs)
 
     def __enter__(self):
