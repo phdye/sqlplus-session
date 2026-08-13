@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='sqlplus-session',
-    version='0.1.0',
+    version='0.2.0',
     description='Persistent Oracle sqlplus session over pipes',
     long_description=open('README.md').read(),
     author='Philip Dye',

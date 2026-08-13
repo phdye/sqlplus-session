@@ -3,6 +3,11 @@
 Connect once, run many queries on the same Oracle session.  Stdlib only,
 Python 3.2.5+.  No cx_Oracle, no python-oracledb, no third-party packages.
 
+Credentials never reach the command line.  sqlplus is started as
+``sqlplus -s /nolog`` and authenticated over the same stdin pipe the
+queries use, so the password is invisible to ``ps``, to
+``/proc/<pid>/cmdline``, and to anything that logs process arguments.
+
 The module manages one long-lived ``sqlplus -s`` process.  SQL goes in on
 stdin, results come back on stdout, delimited by a numbered sentinel
 (``PROMPT __EOQ__<n>__``).  A reader thread drains the stdout pipe so the
@@ -93,11 +98,15 @@ class SqlplusSession(object):
     Parameters
     ----------
     username : str
-        Oracle username.
+        Oracle username.  Empty selects external authentication --
+        wallet or OS -- and *password* is then ignored.
     password : str
-        Oracle password.
+        Oracle password.  Sent over the stdin pipe in answer to
+        sqlplus's own prompt, never on the command line and never on
+        the ``CONNECT`` line, so no character in it needs quoting.
     connect_string : str
         TNS alias or Easy Connect string (e.g. ``'localhost/orcl'``).
+        Empty means a bequeath connection to ``ORACLE_SID``.
     sqlplus_cmd : str
         Path or bare name of the sqlplus binary.  Default ``'sqlplus'``.
     env : dict or None
@@ -159,14 +168,12 @@ class SqlplusSession(object):
         # Open devnull for stderr redirection; closed in close().
         self._devnull = open(os.devnull, 'w')
 
-        # Build the connect string.  Password may contain special chars
-        # (#, $, @); putting it on the command line is the standard
-        # sqlplus pattern and avoids an interactive CONNECT prompt.
-        login = '%s/%s@%s' % (username, password, connect_string)
-
+        # /nolog, always.  Nothing that identifies the account and
+        # nothing secret is passed as an argument; authentication
+        # happens over stdin in _connect() once the pipe is up.
         try:
             self._proc = subprocess.Popen(
-                [sqlplus_cmd, '-s', login],
+                [sqlplus_cmd, '-s', '/nolog'],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=self._devnull,
@@ -187,8 +194,13 @@ class SqlplusSession(object):
         t.start()
         self._reader_thread = t
 
-        # Send session setup, then probe with a trivial query.
+        # Authenticate, apply session setup, then prove the connection
+        # with a trivial query.  Setup runs after the connect so that
+        # ALTER SESSION is legal in setup_commands.
         try:
+            self._connect(username, password, connect_string,
+                          connect_timeout)
+
             for cmd in setup_commands:
                 self._write(cmd + '\n')
 
@@ -325,6 +337,49 @@ class SqlplusSession(object):
     # Internals                                                           #
     # ------------------------------------------------------------------ #
 
+    def _connect(self, username, password, connect_string, timeout):
+        """Authenticate an already-running ``sqlplus -s /nolog``.
+
+        The credential travels down the stdin pipe the session already
+        owns, so it never lands in the process table.  The password is
+        kept off the CONNECT line as well: sqlplus asks for it, we
+        answer on the following line, and that line is read verbatim.
+        Characters CONNECT would otherwise parse -- ``@``, ``/``, a
+        double quote, a trailing ``#`` -- therefore need no escaping.
+
+        Nothing about the password is retained once this returns.
+        """
+        # ECHO OFF first, so nothing we send is written back to stdout.
+        # Deliberately not part of setup_commands: a caller who clears
+        # that list still gets it.
+        self._write('SET ECHO OFF\n')
+
+        if username:
+            if connect_string:
+                self._write('CONNECT %s@%s\n' % (username, connect_string))
+            else:
+                self._write('CONNECT %s\n' % username)
+            self._write('%s\n' % (password or ''))
+        elif connect_string:
+            # External authentication: wallet, or OS authentication.
+            self._write('CONNECT /@%s\n' % connect_string)
+        else:
+            self._write('CONNECT /\n')
+
+        lines = self._raw_query('', timeout)
+        if password:
+            # Belt and braces.  ECHO OFF should mean the credential is
+            # never reflected, but an exception raised from here would
+            # otherwise carry whatever did come back.
+            lines = [l.replace(password, '***') for l in lines]
+
+        errs = [l for l in lines if self._error_re.search(l)]
+        if errs:
+            self._kill()
+            raise SqlplusConnectError(
+                'sqlplus connect failed: %s' % '; '.join(errs),
+                output=lines)
+
     def _write(self, text):
         """Write *text* to sqlplus stdin and flush."""
         try:
@@ -367,7 +422,11 @@ class SqlplusSession(object):
                 self._closed = True
                 raise SqlplusDied(rc, lines)
             stripped = line.rstrip('\r\n')
-            if stripped == sentinel:
+            # endswith, not just ==: sqlplus writes its prompts
+            # ("Enter password:") with no trailing newline, so a prompt
+            # can arrive glued to the front of the next line -- and
+            # during connect that next line is the sentinel.
+            if stripped == sentinel or stripped.endswith(sentinel):
                 break
             lines.append(stripped)
         return lines

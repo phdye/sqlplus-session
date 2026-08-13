@@ -26,6 +26,27 @@ stdin, results come back on stdout, delimited by a numbered sentinel
 (`PROMPT __EOQ__<n>__`). A daemon thread drains the stdout pipe so the
 main thread can impose per-query timeouts via `Queue.get(timeout=)`.
 
+## Credentials
+
+sqlplus is started as `sqlplus -s /nolog`. Nothing secret is passed as
+an argument, so the password does not appear in `ps`, in
+`/proc/<pid>/cmdline`, or in any audit trail that records process
+arguments. Authentication then happens over the same stdin pipe the
+queries use: the session sends `CONNECT <user>@<tns>` and answers the
+password prompt on the following line.
+
+Because that line is read verbatim rather than parsed, characters that
+would otherwise have to be quoted — `@`, `/`, a double quote, a
+trailing `#` — are passed through as they are.
+
+For a wallet or OS authentication, pass an empty username; the password
+is then ignored and the session issues `CONNECT /@<tns>`.
+
+```python
+with SqlplusSession('', '', 'ORCLPDB1') as s:      # wallet
+    print(s.query('SELECT user FROM dual'))
+```
+
 ## API
 
 ### SqlplusSession(username, password, connect_string, ...)

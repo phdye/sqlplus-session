@@ -26,8 +26,8 @@ from sqlplus_session import (
 FAKE_SQLPLUS = os.path.join(os.path.dirname(__file__), 'fake_sqlplus.py')
 
 # The fake is invoked as: python <fake_sqlplus.py>
-# SqlplusSession calls [sqlplus_cmd, '-s', login], so we make a wrapper
-# that ignores the -s and login args and runs the fake.
+# SqlplusSession calls [sqlplus_cmd, '-s', '/nolog'], so we make a
+# wrapper that ignores those two arguments and runs the fake.
 _PYTHON = sys.executable
 
 
@@ -375,6 +375,83 @@ class TestSetupCommands(unittest.TestCase):
             rows = s.query('SELECT 1 FROM DUAL')
             vals = [r.strip() for r in rows if r.strip()]
             self.assertIn('1', vals)
+
+
+class TestCredentialExposure(unittest.TestCase):
+    """The password must never reach the command line."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix='sqlplus_cred_')
+        self.argv = os.path.join(self.dir, 'argv')
+        self.seen = os.path.join(self.dir, 'seen')
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _env(self, **extra):
+        e = dict(os.environ)
+        e['FAKE_SQLPLUS_ARGV'] = self.argv
+        e['FAKE_SQLPLUS_SEEN'] = self.seen
+        e.update(extra)
+        return e
+
+    def _read(self, path):
+        if not os.path.exists(path):
+            return ''
+        with open(path) as fh:
+            return fh.read()
+
+    def test_login_is_nolog_and_argv_holds_no_secret(self):
+        with _make_session(password='s3kr1t-pw', env=self._env()) as s:
+            s.query('SELECT 1 FROM DUAL')
+        argv = self._read(self.argv)
+        self.assertIn('/nolog', argv)
+        self.assertNotIn('s3kr1t-pw', argv)
+        self.assertNotIn('test/', argv)
+
+    def test_password_travels_on_stdin(self):
+        with _make_session(password='s3kr1t-pw', env=self._env()):
+            pass
+        seen = self._read(self.seen).splitlines()
+        self.assertIn('CONNECT test@fake', seen)
+        self.assertIn('s3kr1t-pw', seen)
+        # It is its own line, not part of the CONNECT.
+        self.assertFalse(any('CONNECT' in l and 's3kr1t-pw' in l
+                             for l in seen))
+
+    def test_special_characters_need_no_quoting(self):
+        # @ / " and a trailing # all break a CONNECT line if the
+        # password is written on it.  On its own line they are literal.
+        pw = 'p@ss/w"rd#'
+        with _make_session(password=pw, env=self._env()) as s:
+            rows = s.query('SELECT 5 FROM DUAL')
+            self.assertIn('5', [r.strip() for r in rows if r.strip()])
+        self.assertIn(pw, self._read(self.seen).splitlines())
+        self.assertNotIn(pw, self._read(self.argv))
+
+    def test_password_prompt_does_not_wedge_the_reader(self):
+        # An interactive sqlplus writes "Enter password: " with no
+        # newline, so it arrives glued to the head of the next line.
+        env = self._env(FAKE_SQLPLUS_PROMPT='1')
+        with _make_session(password='pw', env=env) as s:
+            rows = s.query('SELECT 3 FROM DUAL')
+            self.assertIn('3', [r.strip() for r in rows if r.strip()])
+
+    def test_external_auth_sends_no_password_line(self):
+        with _make_session(username='', password='', env=self._env()) as s:
+            self.assertTrue(s.alive)
+        seen = self._read(self.seen).splitlines()
+        self.assertIn('CONNECT /@fake', seen)
+
+    def test_rejected_login_raises_without_echoing_the_secret(self):
+        env = self._env(FAKE_SQLPLUS_BADPW='1')
+        with self.assertRaises(SqlplusConnectError) as ctx:
+            _make_session(password='s3kr1t-pw', env=env)
+        msg = str(ctx.exception)
+        self.assertIn('ORA-01017', msg)
+        self.assertNotIn('s3kr1t-pw', msg)
 
 
 def tearDownModule():
