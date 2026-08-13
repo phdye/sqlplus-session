@@ -12,7 +12,15 @@ same Oracle session without the per-query connect/authenticate overhead.
         print(rows)
 """
 
-from .session import SqlplusSession
+from .session import (
+    SqlplusSession,
+    credentials_from_environment,
+    resolve_credentials,
+    load_env_file,
+    ENV_USERNAME,
+    ENV_PASSWORD,
+    ENV_CONNECT,
+)
 from ._errors import (
     SqlplusError,
     SqlplusConnectError,
@@ -21,10 +29,16 @@ from ._errors import (
     SqlplusTimeout,
 )
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 __all__ = [
     'SqlplusSession',
+    'credentials_from_environment',
+    'resolve_credentials',
+    'load_env_file',
+    'ENV_USERNAME',
+    'ENV_PASSWORD',
+    'ENV_CONNECT',
     'SqlplusError',
     'SqlplusConnectError',
     'SqlplusDied',

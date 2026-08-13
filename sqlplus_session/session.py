@@ -8,6 +8,14 @@ Credentials never reach the command line.  sqlplus is started as
 queries use, so the password is invisible to ``ps``, to
 ``/proc/<pid>/cmdline``, and to anything that logs process arguments.
 
+Credentials default to ``DB_USERNAME``, ``DB_PASSWORD`` and ``DB_NAME``
+(or ``TWO_TASK``, or ``ORACLE_SID``).  The defaults live here rather
+than in each caller, so ``SqlplusSession()`` with no arguments is a
+working session and no tool has to reinvent the convention::
+
+    with SqlplusSession() as s:
+        print(s.query('SELECT user FROM dual'))
+
 The module manages one long-lived ``sqlplus -s`` process.  SQL goes in on
 stdin, results come back on stdout, delimited by a numbered sentinel
 (``PROMPT __EOQ__<n>__``).  A reader thread drains the stdout pipe so the
@@ -44,7 +52,17 @@ from ._errors import (
     SqlplusTimeout,
 )
 
-__all__ = ['SqlplusSession']
+__all__ = ['SqlplusSession', 'credentials_from_environment',
+           'resolve_credentials', 'load_env_file']
+
+# The conventional variables. A caller that passes None for any of the
+# three credential arguments gets the corresponding value from here, so
+# SqlplusSession() with no arguments at all is a working environment-
+# driven session.
+ENV_USERNAME = 'DB_USERNAME'
+ENV_PASSWORD = 'DB_PASSWORD'
+# DB_NAME first, then the two variables sqlplus itself already honours.
+ENV_CONNECT = ('DB_NAME', 'TWO_TASK', 'ORACLE_SID')
 
 # Sensible defaults for scripted (non-interactive) use.  Callers can
 # override via the *setup_commands* constructor argument.
@@ -76,6 +94,85 @@ _SENTINEL_PREFIX = '__EOQ__'
 _SENTINEL_SUFFIX = '__'
 
 
+def credentials_from_environment():
+    """Return ``(username, password, connect_string)`` from the environment.
+
+    Empty strings where a variable is unset. Nothing is read lazily and
+    nothing is cached: a caller that changes the environment between
+    sessions gets the change.
+    """
+    connect = ''
+    for name in ENV_CONNECT:
+        connect = os.environ.get(name) or ''
+        if connect:
+            break
+    return (os.environ.get(ENV_USERNAME) or '',
+            os.environ.get(ENV_PASSWORD) or '',
+            connect)
+
+
+def resolve_credentials(username, password, connect_string):
+    """Fill in whichever of the three were left as ``None``.
+
+    ``None`` means take it from the environment. An empty string means
+    what it says, which is why the two are not interchangeable: passing
+    ``''`` as the username selects external authentication and must not
+    be overridden by whatever happens to be exported.
+    """
+    env_user, env_pw, env_connect = credentials_from_environment()
+    return (env_user if username is None else username,
+            env_pw if password is None else password,
+            env_connect if connect_string is None else connect_string)
+
+
+# Sourced in a subshell, which then prints back only the three values we
+# asked for.  Sourcing rather than parsing matters: an environment file
+# that computes its values, or that defers to another file, is common and
+# a line-by-line parser gets it wrong.  NUL separators because a password
+# is allowed to contain anything, newlines included.
+#
+# The five variables are unset before the file is sourced, so what comes
+# back is what the file provides and not whatever the caller happened to
+# have exported.  Without that, this function's answer depends on ambient
+# state, which is the kind of thing that works on one box and not the
+# next.  A caller wanting file-over-environment merges the two itself;
+# credentials_from_environment() is right there.
+_ENV_FILE_SCRIPT = (
+    'unset DB_USERNAME DB_PASSWORD DB_NAME TWO_TASK ORACLE_SID\n'
+    '. "$1" >/dev/null 2>&1 || exit 3\n'
+    'printf "%s\\0%s\\0%s\\0" "$DB_USERNAME" "$DB_PASSWORD" '
+    '"${DB_NAME:-${TWO_TASK:-$ORACLE_SID}}"\n'
+)
+
+
+def load_env_file(path, shell='/bin/sh'):
+    """Source a shell environment file; return its credential triple.
+
+    Only the three variables come back, so nothing else in the file
+    enters this process, and the password crosses one pipe instead of
+    being recovered from a line of text.
+
+    The answer describes the file alone: the credential variables are
+    unset before it is sourced, so an exported ``DB_NAME`` in the
+    calling shell cannot show through and be mistaken for the file's.
+
+    Raises ``IOError`` if *path* is not there and ``ValueError`` if the
+    shell cannot source it.
+    """
+    if not os.path.isfile(path):
+        raise IOError('no such environment file: %s' % path)
+    try:
+        out = subprocess.check_output(
+            [shell, '-c', _ENV_FILE_SCRIPT, 'sqlplus-session', path],
+            stderr=subprocess.PIPE)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError('cannot source %s: %s' % (path, exc))
+    parts = out.decode('utf-8', 'replace').split('\0')
+    while len(parts) < 3:
+        parts.append('')
+    return parts[0], parts[1], parts[2]
+
+
 def _reader_loop(pipe, q):
     """Read lines from *pipe*, put each on *q*.  ``None`` signals EOF."""
     try:
@@ -97,16 +194,22 @@ class SqlplusSession(object):
 
     Parameters
     ----------
-    username : str
-        Oracle username.  Empty selects external authentication --
-        wallet or OS -- and *password* is then ignored.
-    password : str
-        Oracle password.  Sent over the stdin pipe in answer to
-        sqlplus's own prompt, never on the command line and never on
-        the ``CONNECT`` line, so no character in it needs quoting.
-    connect_string : str
+    username : str or None
+        Oracle username.  ``None``, the default, takes it from
+        ``DB_USERNAME``.  An empty string selects external
+        authentication -- wallet or OS -- and *password* is then
+        ignored.  The two are not interchangeable: ``None`` asks the
+        environment, ``''`` states an answer.
+    password : str or None
+        Oracle password.  ``None`` takes it from ``DB_PASSWORD``.
+        Sent over the stdin pipe in answer to sqlplus's own prompt,
+        never on the command line and never on the ``CONNECT`` line,
+        so no character in it needs quoting.
+    connect_string : str or None
         TNS alias or Easy Connect string (e.g. ``'localhost/orcl'``).
-        Empty means a bequeath connection to ``ORACLE_SID``.
+        ``None`` takes it from ``DB_NAME``, then ``TWO_TASK``, then
+        ``ORACLE_SID``.  Empty means a bequeath connection to
+        ``ORACLE_SID``.
     sqlplus_cmd : str
         Path or bare name of the sqlplus binary.  Default ``'sqlplus'``.
     env : dict or None
@@ -140,11 +243,14 @@ class SqlplusSession(object):
         wrong, or the credentials are rejected.
     """
 
-    def __init__(self, username, password, connect_string,
+    def __init__(self, username=None, password=None, connect_string=None,
                  sqlplus_cmd='sqlplus', env=None, setup_commands=None,
                  connect_timeout=30, default_timeout=60,
                  error_patterns=None, on_error='raise',
                  path_converter=None):
+
+        username, password, connect_string = resolve_credentials(
+            username, password, connect_string)
 
         if on_error not in ('raise', 'return'):
             raise ValueError("on_error must be 'raise' or 'return', "
@@ -318,6 +424,20 @@ class SqlplusSession(object):
             self._devnull.close()
         except (IOError, OSError):
             pass
+
+    @classmethod
+    def from_env_file(cls, path, shell='/bin/sh', **kwargs):
+        """Open a session using credentials from a shell environment file.
+
+        The three values are sourced out of *path* and passed straight
+        to the constructor, so a caller with an environment file does
+        not have to know what the variables are called::
+
+            with SqlplusSession.from_env_file('~/.dbenv') as s:
+                ...
+        """
+        user, pw, connect = load_env_file(os.path.expanduser(path), shell)
+        return cls(user, pw, connect, **kwargs)
 
     def __enter__(self):
         return self

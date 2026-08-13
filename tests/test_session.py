@@ -20,6 +20,9 @@ from sqlplus_session import (
     SqlplusOraError,
     SqlplusTimeout,
     SqlplusError,
+    credentials_from_environment,
+    resolve_credentials,
+    load_env_file,
 )
 
 # Path to the fake sqlplus script.
@@ -375,6 +378,166 @@ class TestSetupCommands(unittest.TestCase):
             rows = s.query('SELECT 1 FROM DUAL')
             vals = [r.strip() for r in rows if r.strip()]
             self.assertIn('1', vals)
+
+
+class TestEnvironmentDefaults(unittest.TestCase):
+    """DB_USERNAME, DB_PASSWORD and DB_NAME are the package's own defaults."""
+
+    VARS = ('DB_USERNAME', 'DB_PASSWORD', 'DB_NAME', 'TWO_TASK', 'ORACLE_SID')
+
+    def setUp(self):
+        self.saved = dict((k, os.environ.get(k)) for k in self.VARS)
+        for k in self.VARS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_reads_the_conventional_variables(self):
+        os.environ['DB_USERNAME'] = 'envuser'
+        os.environ['DB_PASSWORD'] = 'envpw'
+        os.environ['DB_NAME'] = 'envtns'
+        self.assertEqual(credentials_from_environment(),
+                         ('envuser', 'envpw', 'envtns'))
+
+    def test_connect_target_falls_back_in_order(self):
+        os.environ['ORACLE_SID'] = 'sid'
+        self.assertEqual(credentials_from_environment()[2], 'sid')
+        os.environ['TWO_TASK'] = 'two'
+        self.assertEqual(credentials_from_environment()[2], 'two')
+        os.environ['DB_NAME'] = 'name'
+        self.assertEqual(credentials_from_environment()[2], 'name')
+
+    def test_unset_reads_as_empty_not_none(self):
+        self.assertEqual(credentials_from_environment(), ('', '', ''))
+
+    def test_none_asks_the_environment(self):
+        os.environ['DB_USERNAME'] = 'envuser'
+        os.environ['DB_PASSWORD'] = 'envpw'
+        os.environ['DB_NAME'] = 'envtns'
+        self.assertEqual(resolve_credentials(None, None, None),
+                         ('envuser', 'envpw', 'envtns'))
+
+    def test_empty_string_is_an_answer_not_a_question(self):
+        # '' selects external authentication and must survive a set
+        # DB_USERNAME, or a wallet connection would silently become a
+        # password connection.
+        os.environ['DB_USERNAME'] = 'envuser'
+        os.environ['DB_PASSWORD'] = 'envpw'
+        self.assertEqual(resolve_credentials('', '', 'tns'),
+                         ('', '', 'tns'))
+
+    def test_explicit_values_win(self):
+        os.environ['DB_USERNAME'] = 'envuser'
+        self.assertEqual(resolve_credentials('given', 'pw', 'tns'),
+                         ('given', 'pw', 'tns'))
+
+    def test_each_argument_resolves_independently(self):
+        os.environ['DB_PASSWORD'] = 'envpw'
+        os.environ['DB_NAME'] = 'envtns'
+        self.assertEqual(resolve_credentials('given', None, None),
+                         ('given', 'envpw', 'envtns'))
+
+    def test_session_connects_with_no_arguments(self):
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp(prefix='sqlplus_env_')
+        try:
+            seen = os.path.join(d, 'seen')
+            os.environ['DB_USERNAME'] = 'envuser'
+            os.environ['DB_PASSWORD'] = 'envpw'
+            os.environ['DB_NAME'] = 'envtns'
+            os.environ['FAKE_SQLPLUS_SEEN'] = seen
+            try:
+                s = SqlplusSession(sqlplus_cmd=_ensure_wrapper(),
+                                   connect_timeout=5, default_timeout=5)
+                rows = s.query('SELECT 4 FROM DUAL')
+                s.close()
+            finally:
+                os.environ.pop('FAKE_SQLPLUS_SEEN', None)
+            self.assertIn('4', [r.strip() for r in rows if r.strip()])
+            with open(seen) as fh:
+                lines = fh.read().splitlines()
+            self.assertIn('CONNECT envuser@envtns', lines)
+            self.assertIn('envpw', lines)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+class TestEnvFile(unittest.TestCase):
+    """One loader in the package, not one per tool."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix='sqlplus_envfile_')
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def write(self, body, name='env.sh'):
+        path = os.path.join(self.dir, name)
+        with open(path, 'w') as fh:
+            fh.write(body)
+        return path
+
+    def test_reads_the_three(self):
+        p = self.write('DB_USERNAME=scott\nDB_PASSWORD=tiger\n'
+                       'DB_NAME=orcl\nexport DB_USERNAME DB_PASSWORD DB_NAME\n')
+        self.assertEqual(load_env_file(p), ('scott', 'tiger', 'orcl'))
+
+    def test_sources_rather_than_parses(self):
+        # A parser would return the literal text of the assignment.
+        p = self.write('host=box\nport=1521\nsvc=orcl\n'
+                       'DB_NAME="${host}:${port}/${svc}"\n')
+        self.assertEqual(load_env_file(p)[2], 'box:1521/orcl')
+
+    def test_connect_target_falls_back(self):
+        p = self.write('TWO_TASK=fromtwotask\n')
+        self.assertEqual(load_env_file(p)[2], 'fromtwotask')
+        p = self.write('ORACLE_SID=fromsid\n', 'sid.sh')
+        self.assertEqual(load_env_file(p)[2], 'fromsid')
+
+    def test_awkward_password_survives(self):
+        # Spaces, a hash, an at sign, a quote: all legal in a password
+        # and all things a line parser or a CONNECT line would mangle.
+        p = self.write("DB_PASSWORD='a b#c@d\"e'\n")
+        self.assertEqual(load_env_file(p)[1], 'a b#c@d"e')
+
+    def test_unset_variables_read_as_empty(self):
+        p = self.write('# nothing here\n')
+        self.assertEqual(load_env_file(p), ('', '', ''))
+
+    def test_missing_file_raises(self):
+        self.assertRaises(IOError, load_env_file,
+                          os.path.join(self.dir, 'absent.sh'))
+
+    def test_unsourceable_file_raises(self):
+        p = self.write('exit 7\n')
+        self.assertRaises(ValueError, load_env_file, p)
+
+    def test_from_env_file_opens_a_session(self):
+        seen = os.path.join(self.dir, 'seen')
+        p = self.write('DB_USERNAME=filer\nDB_PASSWORD=filepw\n'
+                       'DB_NAME=filetns\n')
+        os.environ['FAKE_SQLPLUS_SEEN'] = seen
+        try:
+            s = SqlplusSession.from_env_file(
+                p, sqlplus_cmd=_ensure_wrapper(),
+                connect_timeout=5, default_timeout=5)
+            rows = s.query('SELECT 6 FROM DUAL')
+            s.close()
+        finally:
+            os.environ.pop('FAKE_SQLPLUS_SEEN', None)
+        self.assertIn('6', [r.strip() for r in rows if r.strip()])
+        with open(seen) as fh:
+            lines = fh.read().splitlines()
+        self.assertIn('CONNECT filer@filetns', lines)
+        self.assertIn('filepw', lines)
 
 
 class TestCredentialExposure(unittest.TestCase):

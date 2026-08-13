@@ -16,8 +16,8 @@ Usage:
 
 With --user/--password/--tns, credentials are passed directly.  With
 --tns alone, OS authentication (/@TNS) is used.  With --env-file, the
-specified shell script is sourced and ORACLE_USER, ORACLE_PASSWORD,
-and ORACLE_TNS are read from the resulting environment.
+script is sourced for DB_USERNAME, DB_PASSWORD and DB_NAME (or TWO_TASK
+or ORACLE_SID), and for the runtime variables sqlplus needs.
 """
 
 import os
@@ -32,11 +32,18 @@ from sqlplus_session import (
     SqlplusOraError,
     SqlplusTimeout,
     SqlplusDied,
+    load_env_file,
 )
 
 
 def bootstrap_env_file(env_file_path):
-    """Source an env file in sh and return the resulting env dict."""
+    """Source an env file in sh and return the resulting env dict.
+
+    This is for the runtime variables only -- ORACLE_HOME, PATH and the
+    rest that sqlplus needs to find its libraries. Credentials come from
+    load_env_file(), so the package stays the one place that knows what
+    a credential variable is called.
+    """
     devnull = open(os.devnull, 'w')
     try:
         proc = subprocess.Popen(
@@ -115,8 +122,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--env-file', default=None,
                         help='Shell script to source for env vars '
-                             '(reads ORACLE_USER, ORACLE_PASSWORD, '
-                             'ORACLE_TNS)')
+                             '(reads DB_USERNAME, DB_PASSWORD, and '
+                             'DB_NAME or TWO_TASK or ORACLE_SID)')
     parser.add_argument('--user', default=None,
                         help='Oracle username (empty or omit for OS auth)')
     parser.add_argument('--password', default=None,
@@ -142,12 +149,10 @@ def main():
             sys.exit('env file not found: %s' % args.env_file)
         print('env-file: %s' % args.env_file)
         print('bootstrapping...')
+        user, pw, tns = load_env_file(args.env_file)
         env = bootstrap_env_file(args.env_file)
-        user = env.get('ORACLE_USER', '')
-        pw = env.get('ORACLE_PASSWORD', '')
-        tns = env.get('ORACLE_TNS', '')
         if not tns:
-            sys.exit('env file did not set ORACLE_TNS')
+            sys.exit('env file set none of DB_NAME, TWO_TASK or ORACLE_SID')
         for k in ('ORACLE_HOME', 'PATH', 'LD_LIBRARY_PATH', 'TNS_ADMIN',
                   'NLS_LANG', 'NLS_DATE_FORMAT'):
             if k in env:

@@ -28,6 +28,45 @@ main thread can impose per-query timeouts via `Queue.get(timeout=)`.
 
 ## Credentials
 
+Credentials default to the environment, and the defaults live in the package
+rather than in each caller:
+
+| argument | variable |
+|---|---|
+| `username` | `DB_USERNAME` |
+| `password` | `DB_PASSWORD` |
+| `connect_string` | `DB_NAME`, then `TWO_TASK`, then `ORACLE_SID` |
+
+```python
+with SqlplusSession() as s:                        # nothing to pass
+    print(s.query('SELECT user FROM dual'))
+```
+
+`None` means ask the environment. An empty string means what it says, so
+`SqlplusSession('', '', 'ORCLPDB1')` still selects external authentication even
+where `DB_USERNAME` is exported. Each of the three resolves on its own:
+`SqlplusSession('scott')` takes the password and the target from the
+environment.
+
+`credentials_from_environment()` returns the triple without constructing a
+session, for a caller that wants to report what it found before connecting.
+
+Where the credentials live in a shell file, the package sources it rather than
+making every tool write its own parser:
+
+```python
+with SqlplusSession.from_env_file('~/.dbenv') as s:
+    ...
+
+user, pw, tns = load_env_file('/etc/app/db.sh')    # if you want to look first
+```
+
+Sourcing beats parsing because environment files compute things:
+`DB_NAME="${host}:${port}/${svc}"` is a line no parser gets right. Only the
+three variables come back out of the subshell, and they are unset before the
+file is sourced, so the answer describes the file rather than whatever the
+calling shell happened to export.
+
 sqlplus is started as `sqlplus -s /nolog`. Nothing secret is passed as
 an argument, so the password does not appear in `ps`, in
 `/proc/<pid>/cmdline`, or in any audit trail that records process
@@ -49,7 +88,9 @@ with SqlplusSession('', '', 'ORCLPDB1') as s:      # wallet
 
 ## API
 
-### SqlplusSession(username, password, connect_string, ...)
+### SqlplusSession(username=None, password=None, connect_string=None, ...)
+
+The three credential arguments default to the environment; see above.
 
 Constructor parameters:
 
@@ -69,6 +110,16 @@ Constructor parameters:
 - `run_file(path, timeout=None)` -- run @file, return output lines
 - `close()` -- shut down the session (idempotent)
 - `alive` -- property, True if sqlplus is still running
+- `SqlplusSession.from_env_file(path, shell='/bin/sh', **kw)` -- classmethod;
+  source a shell file for the credentials and open a session
+
+### Module functions
+
+- `credentials_from_environment()` -- `(username, password, connect_string)`
+  from `DB_USERNAME` / `DB_PASSWORD` / `DB_NAME`|`TWO_TASK`|`ORACLE_SID`
+- `resolve_credentials(u, p, c)` -- fill in whichever are `None`
+- `load_env_file(path, shell='/bin/sh')` -- source a shell file, return the
+  triple
 
 ### Exceptions
 
