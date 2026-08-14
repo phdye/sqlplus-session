@@ -3,6 +3,30 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.5.0 — 2026-08-14
+
+`tests/test_spike_oracle.py` becomes `tests/test_oracle_integration.py`, a
+pytest suite rather than a script with a `main()`. It stopped being a spike
+some time ago.
+
+Credentials now come from the package. Options — `--user`, `--password`,
+`--tns`, `--env-file`, `--sqlplus` — win over the environment, and anything
+omitted is passed as `None`, which is exactly what tells
+`resolve_credentials()` to consult `DB_USERNAME`, `DB_PASSWORD` and
+`DB_NAME`/`TWO_TASK`/`ORACLE_SID`. No test reads one of those names itself.
+
+With no connect target the suite fails and says which variable to set,
+rather than skipping. It also fails when the sqlplus binary is not there.
+
+Twenty tests, up from six checks, including two the old script never made:
+`run_file()` against a real instance, and a read of
+`/proc/<pid>/cmdline` on the live process to confirm no credential reached
+the command line.
+
+Timings moved out to `tools/benchmark.py`, a CLI in the house style —
+docopt-shaped usage, `-h`/`--version`/`-v`/`-t`/`-d`, options over
+environment. Wall-clock does not belong in an assertion.
+
 ## 0.4.0 — 2026-08-14
 
 The password moves onto the `CONNECT` line, double-quoted. It is still

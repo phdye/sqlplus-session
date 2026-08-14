@@ -136,16 +136,40 @@ All inherit from `SqlplusError`:
 
 ## Testing
 
-Unit tests (no database required):
+Unit tests need no database, no Oracle install, and no pytest — they run
+under plain `unittest` so they also run on the 3.2 interpreter the package
+targets:
 
 ```
-python -m pytest tests/test_session.py -v
+cd tests && python -m unittest test_session
+python -m pytest tests/test_session.py -q       # equally fine
 ```
 
-Integration test (requires live sqlplus + Oracle):
+The integration suite needs a live sqlplus and a reachable instance. It
+takes credentials the same way the package does — options first, then the
+environment:
 
 ```
-python tests/test_spike_oracle.py --user scott --password tiger --tns orcl
+pytest tests/test_oracle_integration.py --tns orcl
+pytest tests/test_oracle_integration.py --env-file ~/.dbenv
+DB_NAME=orcl pytest tests/test_oracle_integration.py
+```
+
+`--user`, `--password`, `--tns`, `--env-file` and `--sqlplus` are all
+optional; anything you leave out falls through to `DB_USERNAME`,
+`DB_PASSWORD` and `DB_NAME`/`TWO_TASK`/`ORACLE_SID`. With no username at
+all the suite connects as `/@ALIAS`, which is wallet or OS authentication.
+
+It fails rather than skipping when there is no target, and says which
+variable to set. A suite that quietly does nothing reports success for
+work it never did.
+
+Timings are not tests. They live in `tools/benchmark.py`:
+
+```
+tools/benchmark.py --tns orcl -N 50
+tools/benchmark.py --tns orcl --no-baseline --verbose
+tools/benchmark.py --help
 ```
 
 ## License
