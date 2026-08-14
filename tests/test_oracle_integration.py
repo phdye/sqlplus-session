@@ -26,37 +26,6 @@ from sqlplus_session import (
 MISSING_TABLE = 'nonexistent_table_xyzzy_99'
 
 
-@pytest.fixture(scope='session')
-def open_session(credentials, sqlplus_cmd, run_env, path_converter):
-    """Factory for sessions against the configured instance.
-
-    Session-scoped so the connect cost is paid once per run rather than
-    once per test, and so every session gets closed even if a test
-    leaves one open.
-    """
-    username, password, connect = credentials
-    created = []
-
-    def factory(**kwargs):
-        opts = dict(sqlplus_cmd=sqlplus_cmd, env=run_env,
-                    path_converter=path_converter)
-        opts.update(kwargs)
-        s = SqlplusSession(username, password, connect, **opts)
-        created.append(s)
-        return s
-
-    yield factory
-
-    for s in created:
-        s.close()
-
-
-@pytest.fixture(scope='session')
-def session(open_session):
-    """One shared session for the tests that do not disturb it."""
-    return open_session()
-
-
 def value_of(rows):
     """The single value in *rows*, blank lines and padding discarded."""
     return ''.join(r.strip() for r in rows if r.strip())

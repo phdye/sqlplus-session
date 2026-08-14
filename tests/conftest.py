@@ -151,6 +151,39 @@ def run_env(request):
 
 
 @pytest.fixture(scope='session')
+def open_session(credentials, sqlplus_cmd, run_env, path_converter):
+    """Factory for sessions against the configured instance.
+
+    Session-scoped so the connect cost is paid once per run rather than
+    once per test, and so every session gets closed even if a test
+    leaves one open.
+    """
+    from sqlplus_session import SqlplusSession
+
+    username, password, connect = credentials
+    created = []
+
+    def factory(**kwargs):
+        opts = dict(sqlplus_cmd=sqlplus_cmd, env=run_env,
+                    path_converter=path_converter)
+        opts.update(kwargs)
+        s = SqlplusSession(username, password, connect, **opts)
+        created.append(s)
+        return s
+
+    yield factory
+
+    for s in created:
+        s.close()
+
+
+@pytest.fixture(scope='session')
+def session(open_session):
+    """One shared session for the tests that do not disturb it."""
+    return open_session()
+
+
+@pytest.fixture(scope='session')
 def path_converter():
     """``cygpath -m`` on Cygwin, ``None`` elsewhere.
 
