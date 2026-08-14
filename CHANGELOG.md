@@ -3,6 +3,21 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.5.1 — 2026-08-14
+
+`setup_commands` entries are terminated when they are SQL and left alone
+when they are SQL*Plus commands. An unterminated `ALTER SESSION` sat in
+sqlplus's buffer and swallowed the probe query, so Oracle received
+
+    ALTER SESSION SET NLS_DATE_FORMAT = '...' SELECT 1 FROM DUAL
+
+and answered `ORA-00922: missing or invalid option` — a parse error naming
+a statement the caller never wrote. The default setup list is all SQL*Plus
+commands and never tripped it. One `ALTER SESSION` from a caller does.
+
+Terminating everything is not the alternative: `SET PAGESIZE 0;` is an
+error. The first word decides.
+
 ## 0.5.0 — 2026-08-14
 
 `tests/test_spike_oracle.py` becomes `tests/test_oracle_integration.py`, a

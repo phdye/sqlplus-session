@@ -321,6 +321,65 @@ class TestTerminateSQL(unittest.TestCase):
         self.assertTrue(result.endswith('\n'))
 
 
+class TestTerminateSetup(unittest.TestCase):
+    """setup_commands: SQL needs a terminator, SQL*Plus commands must not."""
+
+    def t(self, cmd):
+        return SqlplusSession._terminate_setup(cmd)
+
+    def test_sqlplus_commands_are_left_alone(self):
+        for cmd in ('SET PAGESIZE 0', 'SET NULL ~', 'WHENEVER SQLERROR CONTINUE',
+                    'COLUMN x FORMAT A20', 'DEFINE y = 1', 'spool off'):
+            self.assertEqual(self.t(cmd), cmd + '\n')
+
+    def test_sql_gets_a_terminator(self):
+        # Without this, sqlplus buffers the statement and swallows
+        # whatever is sent next, which is the probe query. Oracle sees
+        # one malformed statement and answers ORA-00922.
+        self.assertEqual(
+            self.t("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD'"),
+            "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD';\n")
+        self.assertEqual(self.t('ALTER SESSION SET CURRENT_SCHEMA = X'),
+                         'ALTER SESSION SET CURRENT_SCHEMA = X;\n')
+
+    def test_already_terminated_is_not_doubled(self):
+        self.assertEqual(self.t('ALTER SESSION SET A = B;'),
+                         'ALTER SESSION SET A = B;\n')
+        self.assertEqual(self.t('BEGIN NULL; END;\n/'),
+                         'BEGIN NULL; END;\n/\n')
+
+    def test_at_file_is_left_alone(self):
+        self.assertEqual(self.t('@login.sql'), '@login.sql\n')
+
+    def test_empty_is_a_bare_newline(self):
+        self.assertEqual(self.t('   '), '\n')
+
+    def test_default_setup_needs_no_terminators(self):
+        import sqlplus_session.session as _s
+        for cmd in _s._DEFAULT_SETUP:
+            self.assertEqual(self.t(cmd), cmd + '\n')
+
+    def test_setup_reaches_sqlplus_terminated(self):
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp(prefix='sqlplus_setup_')
+        try:
+            seen = os.path.join(d, 'seen')
+            env = dict(os.environ)
+            env['FAKE_SQLPLUS_SEEN'] = seen
+            with _make_session(env=env, setup_commands=[
+                    'SET PAGESIZE 0',
+                    "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD'"]) as s:
+                s.query('SELECT 1 FROM DUAL')
+            with open(seen) as fh:
+                lines = fh.read().splitlines()
+            self.assertIn('SET PAGESIZE 0', lines)
+            self.assertIn("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD';",
+                          lines)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class TestSentinelCounter(unittest.TestCase):
     """The sentinel counter increments and prevents stale matches."""
 

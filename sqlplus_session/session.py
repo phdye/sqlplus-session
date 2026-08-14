@@ -348,7 +348,7 @@ class SqlplusSession(object):
                           connect_timeout)
 
             for cmd in setup_commands:
-                self._write(cmd + '\n')
+                self._write(self._terminate_setup(cmd))
 
             probe = self._raw_query('SELECT 1 FROM DUAL;\n',
                                     timeout=connect_timeout)
@@ -617,6 +617,44 @@ class SqlplusSession(object):
         if errs and self._on_error == 'raise':
             raise SqlplusOraError(errs, lines)
         return lines
+
+    # SQL*Plus commands are complete at the end of the line.  SQL
+    # statements are not: sqlplus buffers them until a terminator
+    # arrives, so an unterminated ALTER SESSION in setup_commands
+    # swallows whatever is sent next.  That next thing is the probe
+    # query, and the buffer reaches Oracle as
+    #
+    #     ALTER SESSION SET NLS_DATE_FORMAT = '...' SELECT 1 FROM DUAL
+    #
+    # which comes back ORA-00922: missing or invalid option.
+    #
+    # The default setup list is all SQL*Plus commands, so nothing here
+    # trips it.  A caller that adds one ALTER SESSION does, and gets a
+    # parse error naming a statement it did not write.
+    _SQLPLUS_COMMANDS = frozenset("""
+        ACCEPT APPEND ARCHIVE ATTRIBUTE BREAK BTITLE CHANGE CLEAR COLUMN
+        COMPUTE CONNECT COPY DEFINE DEL DESC DESCRIBE DISCONNECT EDIT
+        EXEC EXECUTE EXIT GET HELP HOST INPUT LIST PASSWORD PAUSE PRINT
+        PROMPT QUIT RECOVER REM REMARK REPFOOTER REPHEADER RUN SAVE SET
+        SHOW SHUTDOWN SPOOL START STARTUP STORE TIMING TTITLE UNDEFINE
+        VARIABLE WHENEVER XQUERY
+    """.split())
+
+    @classmethod
+    def _terminate_setup(cls, cmd):
+        """Terminate *cmd* if it is SQL, leave it alone if it is not.
+
+        ``SET PAGESIZE 0;`` is an error, so terminating everything is
+        not an option either.
+        """
+        s = cmd.strip()
+        if not s:
+            return '\n'
+        if s[-1] in ';/' or s[0] in '@/':
+            return s + '\n'
+        if s.split(None, 1)[0].upper() in cls._SQLPLUS_COMMANDS:
+            return s + '\n'
+        return s + ';\n'
 
     @staticmethod
     def _terminate_sql(sql):
