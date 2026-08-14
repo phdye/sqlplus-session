@@ -71,12 +71,16 @@ sqlplus is started as `sqlplus -s /nolog`. Nothing secret is passed as
 an argument, so the password does not appear in `ps`, in
 `/proc/<pid>/cmdline`, or in any audit trail that records process
 arguments. Authentication then happens over the same stdin pipe the
-queries use: the session sends `CONNECT <user>@<tns>` and answers the
-password prompt on the following line.
+queries use: the session writes `CONNECT <user>/"<password>"@<tns>` to
+stdin. The quotes are the package's job, not the caller's, so a password
+containing `@`, `/`, a space, `#`, `$`, `%` or `'` needs no preparation.
 
-Because that line is read verbatim rather than parsed, characters that
-would otherwise have to be quoted — `@`, `/`, a double quote, a
-trailing `#` — are passed through as they are.
+Do not be tempted by the password prompt on the following line. It looks
+like the safer place — sqlplus asks for the password there when it has a
+terminal — but with stdin on a pipe sqlplus never asks and parses that
+line as more `CONNECT` arguments instead. Measured against 19c: an `@`
+sends it off to resolve a net service name and the connect hangs until
+the timeout; a `/` or a space comes back `SP2-0306: Invalid option`.
 
 For a wallet or OS authentication, pass an empty username; the password
 is then ignored and the session issues `CONNECT /@<tns>`.

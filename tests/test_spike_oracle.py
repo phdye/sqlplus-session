@@ -21,6 +21,7 @@ or ORACLE_SID), and for the runtime variables sqlplus needs.
 """
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -34,6 +35,7 @@ from sqlplus_session import (
     SqlplusDied,
     load_env_file,
 )
+from sqlplus_session.session import _quote_password
 
 
 def bootstrap_env_file(env_file_path):
@@ -97,7 +99,11 @@ def baseline_query(user, pw, tns, sql, run_env):
         tmp_conv = cygpath_m(tmp) if is_cygwin() else tmp
 
         if user:
-            login = '%s/%s@%s' % (user, pw, tns)
+            # Quoted for the same reason the package quotes it: an
+            # unquoted @ or / in the password is parsed, not read.
+            # This one does land on the command line -- that is what
+            # makes it the baseline and not the recommendation.
+            login = '%s/%s@%s' % (user, _quote_password(pw), tns)
         else:
             login = '/@%s' % tns
 
@@ -191,6 +197,21 @@ def main():
               (N, persistent_elapsed, persistent_elapsed / N * 1000))
 
     # ---- Test 2: per-call baseline ------------------------------------
+    # The baseline is the old pattern on purpose: login string on the
+    # command line, fresh sqlplus per call.  A password with punctuation
+    # in it cannot be carried that way -- quoted or not, argv quoting on
+    # the way to a Windows sqlplus.exe mangles it, and the connect comes
+    # back ORA-12154 or ORA-12543.  That is a finding about the old
+    # pattern, not a failure of this run, so say so and move on.
+    asked_for_no_baseline = args.no_baseline
+    if not args.no_baseline and user and not re.match(r'^\w+$', pw or ''):
+        print()
+        print('=== Test 2: per-call baseline -- skipped ===')
+        print('  this password cannot survive a command-line login string;')
+        print('  rerun with --no-baseline, or time the baseline against an')
+        print('  account whose password is alphanumeric.')
+        args.no_baseline = True
+
     if not args.no_baseline:
         print()
         print('=== Test 2: per-call baseline -- %d queries ===' % N)
@@ -212,7 +233,7 @@ def main():
             print('  persistent: %.1f ms/query' % (persistent_elapsed / N * 1000))
             print('  per-call:   %.1f ms/query' % (baseline_elapsed / N * 1000))
             print('  ratio:      %.1fx' % (baseline_elapsed / persistent_elapsed))
-    else:
+    elif asked_for_no_baseline:
         print()
         print('(skipping baseline -- --no-baseline)')
 

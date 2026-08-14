@@ -5,8 +5,7 @@ Used by the test suite as a subprocess stand-in for real sqlplus.  It
 understands just enough of the protocol to exercise SqlplusSession:
 
 - Ignores SET/WHENEVER commands (no output).
-- Handles CONNECT, including reading the password from the following
-  line the way real sqlplus does after prompting for it.
+- Handles CONNECT, including the quoted password on the CONNECT line.
 - Responds to SELECT with canned output.
 - Echoes PROMPT arguments to stdout (the sentinel protocol).
 - Responds to EXIT by terminating.
@@ -28,9 +27,11 @@ Environment:
                           did and did not reach the command line.
     FAKE_SQLPLUS_SEEN     append every stdin line to this path.
     FAKE_SQLPLUS_PROMPT   if set, write "Enter password: " with no
-                          trailing newline, as an interactive sqlplus
-                          would.  The reader has to cope with a prompt
-                          fragment glued to the next line.
+                          trailing newline, as an sqlplus with a
+                          terminal would.  Real sqlplus does not do
+                          this on a pipe, but the reader still has to
+                          cope with a prompt fragment glued to the
+                          head of the next line.
     FAKE_SQLPLUS_BADPW    reject the connect with ORA-01017.
 """
 
@@ -77,17 +78,18 @@ def main():
                 upper.startswith('ALTER ')):
             continue
 
-        # CONNECT.  With a username, real sqlplus prompts and then
-        # reads the password as the next raw line -- so we consume that
-        # line here rather than letting the main loop treat it as SQL.
+        # CONNECT user/"password"@tns.  Real sqlplus parses the whole
+        # line, and it parses the line after it too when there is no
+        # password on this one, which is why the package always puts
+        # one here.
         if upper.startswith('CONNECT'):
             arg = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ''
-            if not arg.startswith('/'):
-                if os.environ.get('FAKE_SQLPLUS_PROMPT'):
-                    sys.stdout.write('Enter password: ')
-                    sys.stdout.flush()
-                pw = sys.stdin.readline()
-                _record('FAKE_SQLPLUS_SEEN', pw)
+            if os.environ.get('FAKE_SQLPLUS_PROMPT') and not arg.startswith('/'):
+                # An interactive sqlplus writes this with no trailing
+                # newline, so it arrives glued to the next line.  It
+                # does not do so on a pipe, but the reader has to cope.
+                sys.stdout.write('Enter password: ')
+                sys.stdout.flush()
             if os.environ.get('FAKE_SQLPLUS_BADPW'):
                 sys.stdout.write('ERROR:\n')
                 sys.stdout.write('ORA-01017: invalid username/password; '

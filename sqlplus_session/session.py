@@ -193,6 +193,26 @@ def load_env_file(path, shell='/bin/sh'):
     return parts[0], parts[1], parts[2]
 
 
+def _quote_password(password):
+    """Double-quote a password for the ``CONNECT`` line.
+
+    There is no unquoted place to put a password.  The line after
+    ``CONNECT`` looks like one -- sqlplus prompts for the password there
+    when it has a terminal -- but with stdin on a pipe it parses that
+    line as more CONNECT arguments instead.  Measured against sqlplus
+    19c, 14 August 2026: an ``@`` in the password sends sqlplus off to
+    resolve a net service name and the connect hangs to the timeout, and
+    a ``/`` or a space comes straight back as ``SP2-0306: Invalid
+    option``.  Quoting handles all three, and ``#``, ``$``, ``%``,
+    ``!`` and ``'`` besides.
+
+    Oracle refuses to create a password containing a double quote
+    (``ORA-03001``), so the doubling here is for completeness rather
+    than for any password that can exist.
+    """
+    return '"%s"' % password.replace('"', '""')
+
+
 def _reader_loop(pipe, q):
     """Read lines from *pipe*, put each on *q*.  ``None`` signals EOF."""
     try:
@@ -222,9 +242,9 @@ class SqlplusSession(object):
         environment, ``''`` states an answer.
     password : str or None
         Oracle password.  ``None`` takes it from ``DB_PASSWORD``.
-        Sent over the stdin pipe in answer to sqlplus's own prompt,
-        never on the command line and never on the ``CONNECT`` line,
-        so no character in it needs quoting.
+        Written to the stdin pipe, double-quoted, never to the
+        command line -- so ``ps`` and ``/proc/<pid>/cmdline`` never
+        see it and no character in it needs escaping by the caller.
     connect_string : str or None
         TNS alias or Easy Connect string (e.g. ``'localhost/orcl'``).
         ``None`` takes it from ``DB_NAME``, then ``TWO_TASK``, then
@@ -481,11 +501,9 @@ class SqlplusSession(object):
         """Authenticate an already-running ``sqlplus -s /nolog``.
 
         The credential travels down the stdin pipe the session already
-        owns, so it never lands in the process table.  The password is
-        kept off the CONNECT line as well: sqlplus asks for it, we
-        answer on the following line, and that line is read verbatim.
-        Characters CONNECT would otherwise parse -- ``@``, ``/``, a
-        double quote, a trailing ``#`` -- therefore need no escaping.
+        owns, so it never lands in the process table.  That is the whole
+        of what the /nolog start buys, and it holds regardless of where
+        on the pipe the password goes.
 
         Nothing about the password is retained once this returns.
         """
@@ -495,11 +513,11 @@ class SqlplusSession(object):
         self._write('SET ECHO OFF\n')
 
         if username:
+            login = '%s/%s' % (username, _quote_password(password or ''))
             if connect_string:
-                self._write('CONNECT %s@%s\n' % (username, connect_string))
+                self._write('CONNECT %s@%s\n' % (login, connect_string))
             else:
-                self._write('CONNECT %s\n' % username)
-            self._write('%s\n' % (password or ''))
+                self._write('CONNECT %s\n' % login)
         elif connect_string:
             # External authentication: wallet, or OS authentication.
             self._write('CONNECT /@%s\n' % connect_string)

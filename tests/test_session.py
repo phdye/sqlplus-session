@@ -462,8 +462,7 @@ class TestEnvironmentDefaults(unittest.TestCase):
             self.assertIn('4', [r.strip() for r in rows if r.strip()])
             with open(seen) as fh:
                 lines = fh.read().splitlines()
-            self.assertIn('CONNECT envuser@envtns', lines)
-            self.assertIn('envpw', lines)
+            self.assertIn('CONNECT envuser/"envpw"@envtns', lines)
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -552,8 +551,7 @@ class TestEnvFile(unittest.TestCase):
         self.assertIn('6', [r.strip() for r in rows if r.strip()])
         with open(seen) as fh:
             lines = fh.read().splitlines()
-        self.assertIn('CONNECT filer@filetns', lines)
-        self.assertIn('filepw', lines)
+        self.assertIn('CONNECT filer/"filepw"@filetns', lines)
 
 
 class TestCredentialExposure(unittest.TestCase):
@@ -594,21 +592,30 @@ class TestCredentialExposure(unittest.TestCase):
         with _make_session(password='s3kr1t-pw', env=self._env()):
             pass
         seen = self._read(self.seen).splitlines()
-        self.assertIn('CONNECT test@fake', seen)
-        self.assertIn('s3kr1t-pw', seen)
-        # It is its own line, not part of the CONNECT.
-        self.assertFalse(any('CONNECT' in l and 's3kr1t-pw' in l
-                             for l in seen))
+        self.assertIn('CONNECT test/"s3kr1t-pw"@fake', seen)
+        # And nowhere else: one line carries it, and it is not the
+        # bare line after CONNECT, which sqlplus would reparse.
+        self.assertNotIn('s3kr1t-pw', seen)
 
-    def test_special_characters_need_no_quoting(self):
-        # @ / " and a trailing # all break a CONNECT line if the
-        # password is written on it.  On its own line they are literal.
-        pw = 'p@ss/w"rd#'
+    def test_password_is_quoted_on_the_connect_line(self):
+        # Measured against sqlplus 19c: unquoted, an @ hangs the
+        # connect and a / or a space is SP2-0306.  Quoted, all three
+        # authenticate.  The line after CONNECT is no safer -- sqlplus
+        # parses it the same way when stdin is a pipe.
+        pw = 'p@ss/w rd#'
         with _make_session(password=pw, env=self._env()) as s:
             rows = s.query('SELECT 5 FROM DUAL')
             self.assertIn('5', [r.strip() for r in rows if r.strip()])
-        self.assertIn(pw, self._read(self.seen).splitlines())
+        seen = self._read(self.seen).splitlines()
+        self.assertIn('CONNECT test/"p@ss/w rd#"@fake', seen)
         self.assertNotIn(pw, self._read(self.argv))
+
+    def test_embedded_double_quote_is_doubled(self):
+        # Oracle will not create such a password (ORA-03001), so this
+        # holds the escaping rule rather than a reachable case.
+        import sqlplus_session.session as _s
+        self.assertEqual(_s._quote_password('a"b'), '"a""b"')
+        self.assertEqual(_s._quote_password(''), '""')
 
     def test_password_prompt_does_not_wedge_the_reader(self):
         # An interactive sqlplus writes "Enter password: " with no
