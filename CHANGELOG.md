@@ -118,6 +118,12 @@ produced 32 identical `ORA-01031` tracebacks — 1300 log lines for one fact
 declared in, and "the parent is not in this schema's table list" then means
 elsewhere rather than missing.
 
+`pytest.ini` sets `addopts = -rs`, so every skip prints its reason. Pytest
+reports only a count by default, which is the same shape as the bug the row
+decoder exists to prevent: an empty result and a clean exit reading as
+"there was nothing to find". Reporting only — no privilege or environment
+is assumed there.
+
 ## 0.5.0 — 2026-08-14
 
 `tests/test_spike_oracle.py` becomes `tests/test_oracle_integration.py`, a

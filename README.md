@@ -254,6 +254,11 @@ It fails rather than skipping when there is no target, and says which
 variable to set. A suite that quietly does nothing reports success for
 work it never did.
 
+Where a test genuinely cannot apply it skips, and `pytest.ini` sets `-rs`
+so every skip prints its reason without anyone having to ask for it. A
+count of skipped tests tells you nothing; the reason tells you whether you
+needed a flag, a different schema, or nothing at all.
+
 Timings are not tests. They live in `tools/benchmark.py`:
 
 ```
