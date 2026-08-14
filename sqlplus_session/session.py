@@ -1,7 +1,7 @@
 """Persistent sqlplus session over stdin/stdout pipes.
 
 Connect once, run many queries on the same Oracle session.  Stdlib only,
-Python 3.2.5+.  No cx_Oracle, no python-oracledb, no third-party packages.
+Python 3.2.8+.  No cx_Oracle, no python-oracledb, no third-party packages.
 
 Credentials never reach the command line.  sqlplus is started as
 ``sqlplus -s /nolog`` and authenticated over the same stdin pipe the

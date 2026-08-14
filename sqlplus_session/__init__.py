@@ -1,6 +1,6 @@
 """sqlplus_session -- persistent Oracle sqlplus over pipes.
 
-Stdlib only, Python 3.2.5+.  Connect once, run many queries on the
+Stdlib only, Python 3.2.8+.  Connect once, run many queries on the
 same Oracle session without the per-query connect/authenticate overhead.
 
 ::

@@ -3,7 +3,7 @@
 Persistent Oracle sqlplus session over stdin/stdout pipes. Connect once,
 run many queries on the same session without per-query connect overhead.
 
-Stdlib only. Python 3.2.5+. No cx_Oracle, no python-oracledb, no
+Stdlib only. Python 3.2.8+. No cx_Oracle, no python-oracledb, no
 third-party dependencies.
 
 ## Quick start

@@ -1,4 +1,4 @@
-"""Minimal setup.py -- stdlib only, Python 3.2.5+."""
+"""Minimal setup.py -- stdlib only, Python 3.2.8+."""
 
 import re
 
@@ -27,7 +27,7 @@ setup(
     author_email='phdye@acm.org',
     license='MIT',
     packages=find_packages(exclude=['tests']),
-    python_requires='>=3.2',
+    python_requires='>=3.2.8',
     classifiers=[
         'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',

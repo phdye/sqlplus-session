@@ -22,6 +22,10 @@ prints the prompt and parses that line as more `CONNECT` arguments:
 
 All three now work, verified against eight accounts on Oracle 19c.
 
+The supported floor is now Python 3.2.8. The suite passes under 3.2.5 in
+`cyg325`, under 3.6.9 on the RHEL 8.10 replica, and under 3.9.16 on primary
+Cygwin.
+
 `tests/test_spike_oracle.py` skips its per-call baseline when the password
 has punctuation in it. The baseline puts the login string on the command
 line by design — that is the pattern being compared against — and a Windows
