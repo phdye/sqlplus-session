@@ -55,6 +55,17 @@ def pytest_addoption(parser):
                      'options still win over it.')
     g.addoption('--sqlplus', action='store', default='sqlplus',
                 metavar='PATH', help='sqlplus binary. Default: sqlplus.')
+    g.addoption('--create-objects', action='store_true', default=False,
+                help='Let the schema suite CREATE and DROP its own SPS_* '
+                     'tables. Off by default: the package is read-only and '
+                     'the account running the tests may be too. Needs '
+                     'CREATE TABLE.')
+    g.addoption('--schema-owner', action='store', default=None,
+                metavar='OWNER',
+                help='Schema for the read-only dictionary checks. Default: '
+                     'whoever the session connected as. Point it at a '
+                     'populated schema to give those checks something to '
+                     'chew on.')
 
 
 def _missing_target_message():

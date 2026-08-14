@@ -5,6 +5,24 @@ its own offline tests because the stub had been written to the same
 misunderstanding as the caller, so it agreed with the caller and proved
 nothing.  Oracle does not agree with anybody.
 
+Two halves, because the interesting tests need objects that do not exist
+anywhere by default, and creating them needs a privilege the package
+itself never uses.
+
+Read-only, and the default.  Invariants against whatever schema is
+already there: every foreign key names columns that exist, a primary key
+is a subset of its table's columns, a LOB is a LOB.  Runs on any account
+that can read the dictionary, which is the only thing this layer asks
+for in production.  Point it somewhere populated with
+``--schema-owner``.
+
+With ``--create-objects``, a fixture schema, and the assertions that
+actually pin the behaviour down.  Off by default: the account running
+the suite may be as read-only as the package is, and one that is not is
+a deliberate choice rather than an assumption.
+
+    pytest tests/test_schema_integration.py --tns orcl --create-objects
+
 The fixture builds a small schema and drops it again:
 
     SPS_PARENT      id PK, name NOT NULL, note NULL
@@ -70,8 +88,17 @@ DDL = [
 
 
 @pytest.fixture(scope='module')
-def built(open_session):
-    """Create the fixture schema, yield a session, drop it again."""
+def built(request, open_session):
+    """Create the fixture schema, yield a session, drop it again.
+
+    Skips unless ``--create-objects`` was given.  The privilege is not
+    one the package needs and not one to assume: an account that can
+    read a dictionary is exactly the account this layer is designed for.
+    """
+    if not request.config.getoption('--create-objects'):
+        pytest.skip('needs --create-objects (creates and drops SPS_* '
+                    'tables; requires CREATE TABLE)')
+
     s = open_session()
 
     def drop_all():
@@ -85,9 +112,19 @@ def built(open_session):
     try:
         for statement in DDL:
             s.execute(statement)
-    except SqlplusOraError:
+    except SqlplusOraError as exc:
         drop_all()
-        raise
+        # One legible line. The same privilege failure repeated down 32
+        # tracebacks is 1300 lines of log for one fact.
+        if 'ORA-01031' in str(exc):
+            pytest.fail(
+                'cannot build the fixture schema: %s\n'
+                'The connected account needs CREATE TABLE:\n'
+                '    GRANT CREATE TABLE TO <user>;\n'
+                'Or drop --create-objects and run the read-only checks.'
+                % exc, pytrace=False)
+        pytest.fail('cannot build the fixture schema: %s' % exc,
+                    pytrace=False)
     yield s
     drop_all()
 
@@ -97,8 +134,134 @@ def sch(built):
     return built.schema()
 
 
+@pytest.fixture(scope='session')
+def live(request, session):
+    """The schema this run can actually read, without creating anything."""
+    return session.schema(request.config.getoption('--schema-owner'))
+
+
 def names(columns):
     return [c.name for c in columns]
+
+
+def some_tables(sch, limit=5):
+    """A few tables to check, or a skip saying why there were none."""
+    found = sch.tables()
+    if not found:
+        pytest.skip('schema %s owns no tables; point --schema-owner at one '
+                    'that does to exercise these' % sch.owner)
+    return found[:limit]
+
+
+class TestReadOnlyInvariants:
+    """Things that must hold of any schema, checked against a real one.
+
+    Weaker than the fixture assertions on purpose. These run wherever
+    the dictionary can be read, which is the only privilege the package
+    asks for, and they still exercise every query in the module against
+    Oracle rather than against an idea of Oracle.
+    """
+
+    def test_owner_is_what_was_asked_for(self, request, live, session):
+        asked = request.config.getoption('--schema-owner')
+        if asked:
+            assert live.owner == asked.upper()
+        else:
+            # Defaulting to the connected user is the whole point of
+            # letting owner be omitted.
+            assert live.owner == session.scalar(
+                'SELECT USER FROM dual').upper()
+
+    def test_tables_returns_names(self, live):
+        found = live.tables()
+        assert isinstance(found, list)
+        assert all(isinstance(t, str) and t for t in found)
+
+    def test_tables_is_cached_and_stable(self, live):
+        assert live.tables() == live.tables()
+
+    def test_like_narrows_rather_than_widens(self, live):
+        every = live.tables()
+        narrowed = live.tables(like='A%')
+        assert set(narrowed) <= set(every)
+        assert all(t.startswith('A') for t in narrowed)
+
+    def test_every_table_has_columns(self, live):
+        for table in some_tables(live):
+            assert live.columns(table), table
+
+    def test_column_fields_are_populated(self, live):
+        for table in some_tables(live):
+            for c in live.columns(table):
+                assert c.name
+                assert c.type
+                assert c.nullable in (True, False)
+                assert c.hidden in (True, False)
+                assert c.virtual in (True, False)
+
+    def test_primary_key_is_a_subset_of_the_columns(self, live):
+        for table in some_tables(live):
+            cols = set(names(live.columns(table)))
+            assert set(live.primary_key(table)) <= cols, table
+
+    def test_lobs_are_a_subset_of_the_columns_and_really_lobs(self, live):
+        from sqlplus_session.schema import LOB_TYPES
+        for table in some_tables(live):
+            cols = live.columns(table)
+            lobs = live.lobs(table)
+            assert set(names(lobs)) <= set(names(cols))
+            assert all(c.type in LOB_TYPES for c in lobs)
+
+    def test_foreign_keys_are_internally_consistent(self, live):
+        for table in some_tables(live, limit=10):
+            cols = set(names(live.columns(table)))
+            for fk in live.foreign_keys(table):
+                assert fk.table == table
+                assert fk.columns
+                # As many parent columns as child columns, or the pairing
+                # the caller composes a join from is meaningless.
+                assert len(fk.columns) == len(fk.parent_columns), fk
+                assert set(fk.columns) <= cols, fk
+                assert fk.parent
+
+    def test_a_parent_in_this_schema_really_has_those_columns(self, live):
+        here = set(live.tables())
+        for table in some_tables(live, limit=10):
+            for fk in live.foreign_keys(table):
+                if fk.parent_owner and fk.parent_owner != live.owner:
+                    continue          # points out of this schema
+                if fk.parent not in here:
+                    continue
+                parent_cols = set(names(live.columns(fk.parent)))
+                assert set(fk.parent_columns) <= parent_cols, fk
+
+    def test_children_agree_with_foreign_keys(self, live):
+        for table in some_tables(live):
+            for child in live.children(table):
+                assert any(fk.parent == table
+                           for fk in live.foreign_keys(child)), (table, child)
+
+    def test_a_table_to_itself_is_no_hops(self, live):
+        if not live.declares_foreign_keys():
+            pytest.skip('schema %s declares no foreign keys' % live.owner)
+        for table in some_tables(live, limit=1):
+            assert live.join_path(table, table) == []
+
+    def test_unknown_table_is_an_error_not_an_empty_list(self, live):
+        with pytest.raises(SqlplusSchemaError):
+            live.columns('SPS_DEFINITELY_NOT_A_TABLE_XYZZY')
+
+    def test_declares_foreign_keys_answers_yes_or_no(self, live):
+        assert live.declares_foreign_keys() in (True, False)
+
+    def test_join_path_refuses_to_guess_when_there_is_nothing_to_search(
+            self, live):
+        # Only meaningful where the schema has no keys at all -- and
+        # there, None would read as "no path" rather than "no graph".
+        if live.declares_foreign_keys():
+            pytest.skip('schema %s does declare foreign keys' % live.owner)
+        with pytest.raises(SqlplusSchemaError):
+            live.join_path('A', 'B')
 
 
 class TestTables:

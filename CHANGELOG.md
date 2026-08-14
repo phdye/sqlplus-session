@@ -105,6 +105,19 @@ to anything, which is the shape that fooled a name matcher into reporting a
 count of zero. A stub written to the same misunderstanding as the caller
 agrees with the caller and proves nothing.
 
+The schema suite is read-only by default and checks invariants against
+whatever schema is there, because the dictionary is all this layer reads in
+production and the account running the tests may be no more privileged than
+that. `--create-objects` builds the fixture schema and runs the assertions
+that need it; `--schema-owner` points the read-only checks somewhere
+populated. The first version required `CREATE TABLE` unconditionally and
+produced 32 identical `ORA-01031` tracebacks — 1300 log lines for one fact
+— on an account that did not have it.
+
+`ForeignKey` gained `parent_owner`. A key can point out of the schema it is
+declared in, and "the parent is not in this schema's table list" then means
+elsewhere rather than missing.
+
 ## 0.5.0 — 2026-08-14
 
 `tests/test_spike_oracle.py` becomes `tests/test_oracle_integration.py`, a

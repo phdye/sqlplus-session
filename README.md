@@ -226,9 +226,24 @@ pytest tests/test_schema_integration.py --tns orcl
 DB_NAME=orcl pytest tests
 ```
 
-The schema suite creates a handful of `SPS_*` tables with real keys, a
-CLOB, a BLOB and a virtual column, asks the dictionary about them, and
-drops them again. It needs `CREATE TABLE`.
+The schema suite is read-only by default. It checks invariants against
+whatever schema is already there — every foreign key names columns that
+exist, a primary key is a subset of its table's columns, a LOB is a LOB —
+which needs no more privilege than the package itself does. Point it
+somewhere with tables in it:
+
+```
+pytest tests/test_schema_integration.py --tns orcl --schema-owner HR
+```
+
+`--create-objects` additionally builds a fixture schema — `SPS_*` tables
+with real keys, a CLOB, a BLOB, a virtual column and a deliberate decoy —
+runs the assertions that pin the behaviour down, and drops it again. That
+needs `CREATE TABLE`, so it is off by default rather than assumed:
+
+```
+pytest tests/test_schema_integration.py --tns orcl --create-objects
+```
 
 `--user`, `--password`, `--tns`, `--env-file` and `--sqlplus` are all
 optional; anything you leave out falls through to `DB_USERNAME`,

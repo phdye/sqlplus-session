@@ -74,21 +74,33 @@ class Column(object):
 
 
 class ForeignKey(object):
-    """One foreign key: which columns point at which parent columns."""
+    """One foreign key: which columns point at which parent columns.
 
-    __slots__ = ('name', 'table', 'columns', 'parent', 'parent_columns')
+    *parent_owner* is carried because a key may point out of the schema
+    it is declared in, and then *parent* is not a table this Schema
+    lists.  A caller checking "does the parent exist here" needs to know
+    the difference between absent and elsewhere.
+    """
 
-    def __init__(self, name, table, columns, parent, parent_columns):
+    __slots__ = ('name', 'table', 'columns', 'parent', 'parent_columns',
+                 'parent_owner')
+
+    def __init__(self, name, table, columns, parent, parent_columns,
+                 parent_owner=None):
         self.name = name
         self.table = table
         self.columns = tuple(columns)
         self.parent = parent
         self.parent_columns = tuple(parent_columns)
+        self.parent_owner = parent_owner
 
     def __repr__(self):
+        parent = self.parent
+        if self.parent_owner:
+            parent = '%s.%s' % (self.parent_owner, parent)
         return ('ForeignKey(%r: %s(%s) -> %s(%s))'
                 % (self.name, self.table, ', '.join(self.columns),
-                   self.parent, ', '.join(self.parent_columns)))
+                   parent, ', '.join(self.parent_columns)))
 
     def __eq__(self, other):
         if not isinstance(other, ForeignKey):
@@ -229,7 +241,7 @@ class Schema(object):
             return self._fks
 
         p = cat('k.constraint_name', 'k.table_name', 'c.column_name',
-                'rk.table_name', 'rc.column_name')
+                'rk.table_name', 'rc.column_name', 'k.r_owner')
         try:
             rows = self._s.rows(p.select(
                 'FROM all_constraints k '
@@ -259,18 +271,20 @@ class Schema(object):
 
         by_name = {}
         order = []
-        for name, table, column, parent, parent_column in rows:
+        for name, table, column, parent, parent_column, parent_owner in rows:
             if name not in by_name:
-                by_name[name] = (table, [], parent, [])
+                by_name[name] = (table, [], parent, [], parent_owner)
                 order.append(name)
             by_name[name][1].append(column)
             by_name[name][3].append(parent_column)
 
         fks = {}
         for name in order:
-            table, columns, parent, parent_columns = by_name[name]
+            table, columns, parent, parent_columns, parent_owner = \
+                by_name[name]
             fks.setdefault(table, []).append(
-                ForeignKey(name, table, columns, parent, parent_columns))
+                ForeignKey(name, table, columns, parent, parent_columns,
+                           parent_owner))
         self._fks = fks
         return fks
 
