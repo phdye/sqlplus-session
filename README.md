@@ -125,6 +125,73 @@ Constructor parameters:
 - `load_env_file(path, shell='/bin/sh')` -- source a shell file, return the
   triple
 
+## Rows, not lines
+
+`query()` gives you the lines sqlplus printed. `rows()` gives you tuples:
+
+```python
+from sqlplus_session import cat
+
+p = cat('employee_id', 'last_name', 'hire_date')
+for emp_id, name, hired in sess.rows(p.select('FROM employees WHERE dept = 10')):
+    ...
+```
+
+`cat()` writes the `NVL(TO_CHAR(...))` projection and joins it with a
+separator improbable enough not to occur in the data. The `Projection` it
+returns knows how many expressions went into it, and `select()` carries
+that count into the statement — so the number of columns is stated once,
+where the SQL is built, and cannot drift from it.
+
+A row that arrives with the wrong number of fields raises
+`SqlplusRowWidthError`. That is deliberate: dropping such rows silently
+returns an empty list and a clean exit, which reads as "there was nothing
+there". `on_short='return'` hands the row back whole; `on_short='skip'`
+drops it, and has to be asked for.
+
+`NULL` comes back as `None`, distinct from an empty string. `scalar()`
+returns a single value and refuses to pick one from several.
+
+For hand-written SQL, say how many columns to expect:
+
+```python
+sess.rows("SELECT a||'~|~'||b FROM t", 2)
+```
+
+`linesize=` on the constructor bounds how wide a row may be before sqlplus
+wraps it — a wrapped row decodes as nonsense, and the error says so rather
+than blaming the projection.
+
+## Schema
+
+What is actually there, read from the data dictionary rather than guessed
+from column names:
+
+```python
+sch = sess.schema()
+
+sch.tables(like='INVOICE%')
+sch.columns('INVOICE')              # including hidden and virtual columns
+sch.primary_key('INVOICE')
+sch.foreign_keys('INVOICE_LINE')
+sch.children('INVOICE')
+sch.lobs('DOCUMENT')
+
+for fk in sch.join_path('INVOICE_LINE', 'CUSTOMER'):
+    print(fk.columns, '->', fk.parent, fk.parent_columns)
+```
+
+`join_path` walks the foreign-key graph in both directions and returns the
+chain, so you can compose a join from declared facts. It raises rather than
+returning `None` when the schema declares no foreign keys at all, because
+`None` would look like an answer.
+
+Column types are whatever the dictionary calls them — `BLOB` stays `BLOB`
+and `CLOB` stays `CLOB`.
+
+The package will not tell you which table means what. That is your
+vocabulary, not its.
+
 ### Exceptions
 
 All inherit from `SqlplusError`:
@@ -133,6 +200,10 @@ All inherit from `SqlplusError`:
 - `SqlplusOraError` -- ORA-/TNS-/SP2- error in query output (has `.errors` and `.output`)
 - `SqlplusTimeout` -- query deadline exceeded (session is dead after this)
 - `SqlplusDied` -- sqlplus process exited unexpectedly
+- `SqlplusRowWidthError` -- a row did not decode to the expected number of
+  fields (has `.line`, `.expected`, `.actual`, `.index`, `.output`)
+- `SqlplusSchemaError` -- the dictionary could not answer as asked: no such
+  table, or no foreign keys to search
 
 ## Testing
 
@@ -141,8 +212,8 @@ under plain `unittest` so they also run on the 3.2 interpreter the package
 targets:
 
 ```
-cd tests && python -m unittest test_session
-python -m pytest tests/test_session.py -q       # equally fine
+cd tests && python -m unittest test_functionality test_rows
+python -m pytest tests/test_functionality.py tests/test_rows.py -q
 ```
 
 The integration suite needs a live sqlplus and a reachable instance. It
@@ -151,9 +222,13 @@ environment:
 
 ```
 pytest tests/test_oracle_integration.py --tns orcl
-pytest tests/test_oracle_integration.py --env-file ~/.dbenv
-DB_NAME=orcl pytest tests/test_oracle_integration.py
+pytest tests/test_schema_integration.py --tns orcl
+DB_NAME=orcl pytest tests
 ```
+
+The schema suite creates a handful of `SPS_*` tables with real keys, a
+CLOB, a BLOB and a virtual column, asks the dictionary about them, and
+drops them again. It needs `CREATE TABLE`.
 
 `--user`, `--password`, `--tns`, `--env-file` and `--sqlplus` are all
 optional; anything you leave out falls through to `DB_USERNAME`,

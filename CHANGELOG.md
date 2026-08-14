@@ -60,6 +60,51 @@ number. `session.linesize` reports the effective value either way, and a
 decode failure on a line that long says so instead of blaming the
 projection.
 
+### Schema
+
+```python
+sch = sess.schema()                     # or sess.schema('OTHER_OWNER')
+sch.tables(like='INVOICE%')
+sch.columns('INVOICE')                  # incl. hidden and virtual
+sch.primary_key('INVOICE')
+sch.foreign_keys('INVOICE_LINE')
+sch.children('INVOICE')
+sch.join_path('INVOICE_LINE', 'CUSTOMER')
+sch.lobs('DOCUMENT')
+```
+
+Read from `ALL_TABLES`, `ALL_TAB_COLS` and `ALL_CONSTRAINTS` joined to
+`ALL_CONS_COLUMNS`. Plain SELECTs, no PL/SQL, so a caller enforcing
+read-only can run them. Loaded lazily and cached; row counts are
+deliberately not part of it.
+
+`ALL_TAB_COLS`, not `ALL_TAB_COLUMNS`: the latter omits hidden columns, and
+a column you cannot see is the one that surprises you later.
+
+`join_path` returns the foreign-key chain between two tables, following
+keys in both directions, so a caller composes SQL from declared facts
+rather than from a guess about which column joins to which. It raises
+rather than returning `None` when the schema declares no foreign keys at
+all — `None` would read as "no path between these two" when the truth is
+"there was nothing to search". `declares_foreign_keys()` asks that
+directly, and a login that cannot read `ALL_CONSTRAINTS` gets
+`SqlplusSchemaError` rather than a silent empty answer.
+
+Types stay as the dictionary spells them. A caller that needs to know a
+column is a `BLOB` rather than a `CLOB` is asking a question the two answer
+differently.
+
+Out of scope on purpose: which table means what, which column is the name,
+what to do with a large object once found, and read-only enforcement. A
+caller looking for a particular kind of table knows its own vocabulary; the
+package does not and should not learn it.
+
+Tested against a real dictionary rather than a stub — including a decoy
+table carrying a CLOB and a column called `PARENT_ID` and no relationship
+to anything, which is the shape that fooled a name matcher into reporting a
+count of zero. A stub written to the same misunderstanding as the caller
+agrees with the caller and proves nothing.
+
 ## 0.5.0 — 2026-08-14
 
 `tests/test_spike_oracle.py` becomes `tests/test_oracle_integration.py`, a

@@ -39,6 +39,11 @@ from .rows import (
     decode_rows,
     raw,
 )
+from .schema import (
+    Column,
+    ForeignKey,
+    Schema,
+)
 
 __version__ = '0.6.0'
 
@@ -65,4 +70,8 @@ __all__ = [
     'cat',
     'raw',
     'decode_rows',
+    # schema
+    'Schema',
+    'Column',
+    'ForeignKey',
 ]

@@ -555,6 +555,16 @@ class SqlplusSession(object):
         raise TypeError('columns must be a Projection or an int, got %r'
                         % (columns,))
 
+    def schema(self, owner=None, timeout=None):
+        """A :class:`~sqlplus_session.schema.Schema` for *owner*.
+
+        Defaults to the schema this session is connected as.  Imported
+        lazily so that a caller who only wants rows does not pay for the
+        dictionary module.
+        """
+        from .schema import Schema
+        return Schema(self, owner, timeout=timeout)
+
     def run_file(self, path, timeout=None):
         """Run a ``.sql`` file via ``@<path>``.
 
