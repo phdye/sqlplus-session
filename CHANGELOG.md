@@ -18,6 +18,48 @@ commands and never tripped it. One `ALTER SESSION` from a caller does.
 Terminating everything is not the alternative: `SET PAGESIZE 0;` is an
 error. The first word decides.
 
+## 0.6.0 — 2026-08-14
+
+Implements `a/issue/2026-08-14-rows-and-schema.md`.
+
+### Result decoding
+
+`query()` returns lines. Turning them into columns was left to every
+caller, so every caller wrote it again, and two wrote the same bug.
+
+```python
+p = cat('id', 'name', 'created')
+for row in sess.rows(p.select('FROM employees WHERE dept = 10')):
+    ...
+```
+
+`cat()` builds the `NVL(TO_CHAR(...))` projection and the separator joins;
+the `Projection` it returns knows how many expressions went into it, and
+`select()` carries that count — and the separator and null token — into the
+statement. There is no second place to state the width, so there is no way
+for the two to disagree. That disagreement is the bug: a caller asked for
+one column from a key that was four columns concatenated, every row was
+discarded, and the report said it had measured zero of fifty.
+
+A row whose field count does not match now raises `SqlplusRowWidthError`
+naming the line, what it found and what it expected. `on_short='return'`
+hands the row back whole and `'skip'` restores the old behaviour, which is
+available and is not the default. Silence is what made this expensive.
+
+`scalar()` returns one value, or `None`, and raises rather than picking the
+first of several. `raw()` is `query()` under a name that reads alongside the
+other two.
+
+`NULL` decodes to `None`, not `''`, so it stays distinguishable from an
+empty string — pass `null=''` for the older shape.
+
+`linesize=` is now a constructor argument. It bounds how wide a row can be
+before sqlplus wraps it, and a wrapped row decodes as garbage; it was
+adjustable only by restating the whole `setup_commands` list to change one
+number. `session.linesize` reports the effective value either way, and a
+decode failure on a line that long says so instead of blaming the
+projection.
+
 ## 0.5.0 — 2026-08-14
 
 `tests/test_spike_oracle.py` becomes `tests/test_oracle_integration.py`, a

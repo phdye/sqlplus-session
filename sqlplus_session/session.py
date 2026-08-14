@@ -51,6 +51,12 @@ from ._errors import (
     SqlplusOraError,
     SqlplusTimeout,
 )
+from .rows import (
+    NULL_TOKEN,
+    SEPARATOR,
+    Projection,
+    decode_rows,
+)
 
 __all__ = ['SqlplusSession', 'credentials_from_environment',
            'resolve_credentials', 'load_env_file']
@@ -92,6 +98,13 @@ _DEFAULT_ERROR_PATTERNS = [
 # current one.
 _SENTINEL_PREFIX = '__EOQ__'
 _SENTINEL_SUFFIX = '__'
+
+# SET LIN[ESIZE] n -- sqlplus accepts the abbreviation, so the pattern
+# has to as well or a caller's own setup list reads as having none.
+_LINESIZE_RE = re.compile(r'(?i)^SET\s+LIN(?:E|ES|ESI|ESIZ|ESIZE)?\s+(\d+)\s*$')
+
+# SQL*Plus rejects anything wider from 12.2 on.
+_LINESIZE_MAX = 32767
 
 
 def credentials_from_environment():
@@ -213,6 +226,45 @@ def _quote_password(password):
     return '"%s"' % password.replace('"', '""')
 
 
+def _apply_linesize(setup_commands, linesize):
+    """Settle on a LINESIZE and make the setup list say so.
+
+    LINESIZE is the ceiling on how wide a concatenated row can be before
+    sqlplus wraps it, and a wrapped row decodes as garbage.  It was
+    adjustable only by restating the whole default setup list to change
+    one number, which is a poor trade, so it gets its own argument.
+
+    An explicit *linesize* wins and replaces any ``SET LINESIZE`` in the
+    list.  Otherwise the value is read back out of the list, so
+    ``session.linesize`` is true whichever way it was set, and the row
+    decoder can say something useful when a projection overruns it.
+    """
+    commands = list(setup_commands)
+
+    if linesize is None:
+        found = None
+        for cmd in commands:
+            m = _LINESIZE_RE.match(cmd.strip())
+            if m:
+                found = int(m.group(1))
+        return commands, found
+
+    if not isinstance(linesize, int) or isinstance(linesize, bool):
+        raise TypeError('linesize must be an int, got %r' % (linesize,))
+    if not 1 <= linesize <= _LINESIZE_MAX:
+        raise ValueError('linesize must be between 1 and %d, got %d'
+                         % (_LINESIZE_MAX, linesize))
+
+    replaced = False
+    for i, cmd in enumerate(commands):
+        if _LINESIZE_RE.match(cmd.strip()):
+            commands[i] = 'SET LINESIZE %d' % linesize
+            replaced = True
+    if not replaced:
+        commands.append('SET LINESIZE %d' % linesize)
+    return commands, linesize
+
+
 def _reader_loop(pipe, q):
     """Read lines from *pipe*, put each on *q*.  ``None`` signals EOF."""
     try:
@@ -275,6 +327,17 @@ class SqlplusSession(object):
     path_converter : callable or None
         ``f(str) -> str`` that converts filesystem paths for ``@file``
         commands.  On Cygwin, pass a wrapper around ``cygpath -m``.
+    linesize : int or None
+        ``SET LINESIZE``, and so the ceiling on how wide a row may be
+        before sqlplus wraps it -- a wrapped row decodes as garbage.
+        ``None`` keeps whatever *setup_commands* says, which by default
+        is 4000.  An explicit value replaces any ``SET LINESIZE`` in
+        that list, so one number can be changed without restating the
+        whole list.  Maximum 32767.
+
+        ``session.linesize`` reports the value either way, and
+        :meth:`rows` uses it to say when a decode failure looks like
+        wrapping rather than a bad projection.
 
     Raises
     ------
@@ -287,7 +350,7 @@ class SqlplusSession(object):
                  sqlplus_cmd='sqlplus', env=None, setup_commands=None,
                  connect_timeout=30, default_timeout=60,
                  error_patterns=None, on_error='raise',
-                 path_converter=None):
+                 path_converter=None, linesize=None):
 
         username, password, connect_string = resolve_credentials(
             username, password, connect_string)
@@ -310,6 +373,8 @@ class SqlplusSession(object):
 
         if setup_commands is None:
             setup_commands = list(_DEFAULT_SETUP)
+        setup_commands, self.linesize = _apply_linesize(setup_commands,
+                                                        linesize)
 
         # Open devnull for stderr redirection; closed in close().
         self._devnull = open(os.devnull, 'w')
@@ -406,6 +471,89 @@ class SqlplusSession(object):
             timeout = self.default_timeout
         lines = self._raw_query(self._terminate_sql(sql), timeout)
         return self._handle_errors(lines)
+
+    #: ``raw`` is ``query`` under the name the row layer gave it, so
+    #: that ``raw``/``rows``/``scalar`` read as one family.
+    raw = query
+
+    def rows(self, sql, columns=None, timeout=None, on_short='raise',
+             null=None):
+        """Run *sql* and decode its output into tuples.
+
+        Parameters
+        ----------
+        sql : str
+            Normally what :meth:`Projection.select` returned, in which
+            case it already knows its own width and *columns* can be
+            left alone::
+
+                p = cat('id', 'name')
+                sess.rows(p.select('FROM emp'))
+
+        columns : Projection, int, or None
+            Where the width comes from when *sql* does not carry it.  A
+            :class:`Projection` is preferable to an integer for the same
+            reason: the count and the SQL come from one object, so they
+            cannot disagree.  Asking for one column from a projection of
+            four is how an earlier caller silently discarded every row
+            it fetched.
+        on_short : str
+            ``'raise'`` (default), ``'return'`` or ``'skip'``.  See
+            :func:`sqlplus_session.rows.decode_rows`.
+        null : object
+            What ``NULL_TOKEN`` decodes to.  ``None`` by default, which
+            keeps a NULL distinct from an empty string.
+
+        Returns
+        -------
+        list of tuple
+        """
+        width, separator, null_token = self._decoding_of(sql, columns)
+        lines = self.query(sql, timeout=timeout)
+        return decode_rows(lines, width, separator=separator,
+                           null_token=null_token, on_short=on_short,
+                           null=null, linesize=self.linesize)
+
+    def scalar(self, sql, timeout=None, null=None):
+        """Run *sql* and return one value, or ``None`` if it returned none.
+
+        Raises :class:`ValueError` if more than one row comes back --
+        a scalar query that matched twice is a question that was not
+        asked correctly, and returning the first would hide it.
+        """
+        lines = [l for l in self.query(sql, timeout=timeout) if l.strip()]
+        if not lines:
+            return None
+        if len(lines) > 1:
+            raise ValueError('scalar() got %d rows, expected at most 1: %r'
+                             % (len(lines), lines[:3]))
+        value = lines[0].strip()
+        return null if value == NULL_TOKEN else value
+
+    def _decoding_of(self, sql, columns):
+        """Width and tokens for *sql*, from whichever source has them."""
+        if columns is None:
+            width = getattr(sql, 'width', None)
+            if width is None:
+                raise ValueError(
+                    'no column count: pass a Projection from cat(), use '
+                    'Projection.select() which carries one, or give '
+                    'columns=<int> for hand-written SQL')
+            # Tokens come from the statement too, not from the module
+            # defaults: a custom separator that reached the SQL but not
+            # the split is the same disagreement in a new place.
+            return (width,
+                    getattr(sql, 'separator', SEPARATOR),
+                    getattr(sql, 'null_token', NULL_TOKEN))
+        if isinstance(columns, Projection):
+            return columns.width, columns.separator, columns.null_token
+        if isinstance(columns, int) and not isinstance(columns, bool):
+            if columns < 1:
+                raise ValueError('columns must be at least 1, got %d'
+                                 % columns)
+            return columns, SEPARATOR, NULL_TOKEN
+        raise TypeError('columns must be a Projection or an int, got %r'
+                        % (columns,))
 
     def run_file(self, path, timeout=None):
         """Run a ``.sql`` file via ``@<path>``.

@@ -26,10 +26,21 @@ from ._errors import (
     SqlplusConnectError,
     SqlplusDied,
     SqlplusOraError,
+    SqlplusRowWidthError,
+    SqlplusSchemaError,
     SqlplusTimeout,
 )
+from .rows import (
+    NULL_TOKEN,
+    SEPARATOR,
+    Projection,
+    Statement,
+    cat,
+    decode_rows,
+    raw,
+)
 
-__version__ = '0.5.1'
+__version__ = '0.6.0'
 
 __all__ = [
     'SqlplusSession',
@@ -43,5 +54,15 @@ __all__ = [
     'SqlplusConnectError',
     'SqlplusDied',
     'SqlplusOraError',
+    'SqlplusRowWidthError',
+    'SqlplusSchemaError',
     'SqlplusTimeout',
+    # result decoding
+    'SEPARATOR',
+    'NULL_TOKEN',
+    'Projection',
+    'Statement',
+    'cat',
+    'raw',
+    'decode_rows',
 ]
