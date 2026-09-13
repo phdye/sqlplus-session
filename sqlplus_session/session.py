@@ -277,6 +277,68 @@ def _reader_loop(pipe, q):
         q.put(None)
 
 
+
+#: sqlplus refuses an input line over 4999 characters with SP2-0027 and
+#: ignores it, so a wide projection dies at the terminal rather than in the
+#: database.  The limit is on input and is not settable; LINESIZE governs
+#: output and does not help.  2000 leaves room for the terminator and for a
+#: caller that folded some of the way itself.
+SQLPLUS_INPUT_LIMIT = 2000
+
+
+def fold_long_lines(sql, width=SQLPLUS_INPUT_LIMIT):
+    """Break over-long lines of *sql* at a safe point outside string literals.
+
+    SQL is whitespace-insensitive outside a literal, and sqlplus reads a
+    statement across as many lines as it takes, so a newline costs nothing.
+    Inside a literal it costs everything, which is why this tracks quoting
+    rather than calling textwrap.
+
+    Three cut points, because a generated projection has no spaces in it: a
+    space, the position after a comma, and the position after ``||``.  A
+    concatenation of forty columns is one unbroken run of those two
+    operators, and folding only at spaces leaves it exactly as long as it
+    was.
+
+    A line already within *width* is returned untouched, so ordinary
+    statements and sqlplus commands such as ``SET LINESIZE 32767`` are not
+    reflowed.  A run with no cut point at all -- one enormous literal -- is
+    left alone: too long and intact beats folded and wrong.
+    """
+    out = []
+    for line in sql.split('\n'):
+        if len(line) <= width:
+            out.append(line)
+            continue
+        quoted = False
+        start = 0          # where the current output line begins
+        cut = None         # last safe cut seen since start, as an index
+        drop = False       # whether that cut consumes the character
+        i = 0
+        while i < len(line):
+            c = line[i]
+            if c == "'":
+                # '' inside a literal is an escaped quote, not a close.
+                if quoted and i + 1 < len(line) and line[i + 1] == "'":
+                    i += 2
+                    continue
+                quoted = not quoted
+            elif not quoted:
+                if c == ' ':
+                    cut, drop = i, True
+                elif c == ',':
+                    cut, drop = i + 1, False
+                elif c == '|' and line[i:i + 2] == '||':
+                    cut, drop = i + 2, False
+            if i - start >= width and cut is not None and cut > start:
+                out.append(line[start:cut if not drop else cut])
+                start = cut + 1 if drop else cut
+                cut = None
+            i += 1
+        out.append(line[start:])
+    return '\n'.join(out)
+
+
 class SqlplusSession(object):
     """A persistent Oracle sqlplus session.
 
@@ -469,7 +531,8 @@ class SqlplusSession(object):
         self._check_alive()
         if timeout is None:
             timeout = self.default_timeout
-        lines = self._raw_query(self._terminate_sql(sql), timeout)
+        lines = self._raw_query(
+            self._terminate_sql(fold_long_lines(sql)), timeout)
         return self._handle_errors(lines)
 
     #: ``raw`` is ``query`` under the name the row layer gave it, so
