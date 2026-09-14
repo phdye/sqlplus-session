@@ -106,6 +106,16 @@ def main():
             while True:
                 time.sleep(3600)
 
+        if '__FAKE_BAD_BYTE__' in line:
+            # A byte that is not valid UTF-8, written straight to the
+            # raw stream, the way a database hands back whatever the
+            # column holds.  0xAE is the registered-trademark sign in
+            # cp1252 and appears in real customer names.
+            sys.stdout.flush()
+            sys.stdout.buffer.write(b'\tone\xaetwo\n')
+            sys.stdout.buffer.flush()
+            continue
+
         if '__FAKE_ORA_ERROR__' in line:
             sys.stdout.write('ORA-00942: table or view does not exist\n')
             sys.stdout.flush()

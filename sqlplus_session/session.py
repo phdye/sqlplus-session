@@ -451,6 +451,17 @@ class SqlplusSession(object):
                 stdout=subprocess.PIPE,
                 stderr=self._devnull,
                 universal_newlines=True,  # 'text' kwarg is 3.7+
+                # A query result carries whatever bytes the column
+                # holds, and a database is under no obligation to make
+                # those valid UTF-8: one 0xAE in a name is enough.
+                # Without these two the decode is strict under the
+                # locale default, the reader thread dies on the first
+                # such byte, and every later statement reports a dead
+                # session instead of the one real fault.  Substituting
+                # the character is right here because this stream is
+                # read to be parsed, never to be written back.
+                encoding='utf-8',        # both kwargs are 3.6+
+                errors='replace',
                 bufsize=1,               # line-buffered stdin
                 env=env,
             )
