@@ -1,16 +1,19 @@
-#!/usr/bin/env python3
 """Time a persistent session against the fresh-sqlplus-per-call pattern.
 
 Usage:
-  benchmark.py [options]
-  benchmark.py (-h | --help)
-  benchmark.py --version
+  python -m sqlplus_session.benchmark [options]
+  python -m sqlplus_session.benchmark (-h | --help)
+  python -m sqlplus_session.benchmark (-V | --version)
 
 Options:
   -u NAME, --user=NAME      Oracle username; empty selects external
                             authentication. Overrides $DB_USERNAME.
-  -p PW, --password=PW      Oracle password. Overrides $DB_PASSWORD.
-                            Prefer --env-file; this lands in shell history.
+  -P PATH, --password-file=PATH
+                            Read the password from the first line of
+                            PATH. There is no --password: an argument is
+                            visible to every other user through ps and
+                            lands in shell history besides. Otherwise
+                            $DB_PASSWORD, or --env-file.
   -T ALIAS, --tns=ALIAS     TNS alias or Easy Connect string. Overrides
                             $DB_NAME, $TWO_TASK, $ORACLE_SID.
   -f PATH, --env-file=PATH  Shell file to source for credentials and for
@@ -25,11 +28,14 @@ Options:
   -v, --verbose             Report the latency distribution as well.
   -d, --debug               Traceback on failure instead of a message.
   -h, --help                Show this message.
-  --version                 Show the package version.
+  -V, --version             Show the package version.
 
 Precedence is CLI, then environment, and the package resolves the
 environment itself -- an option left off is passed as None, which is
 what tells sqlplus_session to go and look.
+
+This is development tooling rather than a command anyone installs, so it
+gets no console script; the module form above is the whole interface.
 
 Benchmark on the RHEL replica, not on primary Cygwin: cygwin1.dll 3.6.9
 adds about 15 ms to every pipe round trip to a native Windows binary,
@@ -42,16 +48,14 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                '..'))
-
-from sqlplus_session import (            # noqa: E402  (path set above)
+from . import __version__
+from .session import (
     SqlplusSession,
-    __version__,
+    _quote_password,
     load_env_file,
+    read_password_file,
     resolve_credentials,
 )
-from sqlplus_session.session import _quote_password    # noqa: E402
 
 _RUNTIME_VARS = ('ORACLE_HOME', 'PATH', 'LD_LIBRARY_PATH', 'TNS_ADMIN',
                  'NLS_LANG', 'NLS_DATE_FORMAT')
@@ -63,7 +67,8 @@ def parse_args(argv):
 
     p = argparse.ArgumentParser(add_help=False, usage=__doc__)
     p.add_argument('-u', '--user', default=None)
-    p.add_argument('-p', '--password', default=None)
+    p.add_argument('-P', '--password-file', dest='password_file',
+                   default=None)
     p.add_argument('-T', '--tns', default=None)
     p.add_argument('-f', '--env-file', dest='env_file', default=None)
     p.add_argument('-s', '--sqlplus', default='sqlplus')
@@ -74,7 +79,7 @@ def parse_args(argv):
     p.add_argument('-v', '--verbose', action='store_true')
     p.add_argument('-d', '--debug', action='store_true')
     p.add_argument('-h', '--help', action='store_true')
-    p.add_argument('--version', action='store_true')
+    p.add_argument('-V', '--version', action='store_true')
     return p.parse_args(argv)
 
 
@@ -160,7 +165,15 @@ def main(argv=None):
         print('sqlplus-session %s' % __version__)
         return 0
 
-    given = (args.user, args.password, args.tns)
+    password = None
+    if args.password_file:
+        try:
+            password = read_password_file(args.password_file)
+        except (IOError, OSError) as exc:
+            sys.stderr.write('--password-file: %s\n' % exc)
+            return 2
+
+    given = (args.user, password, args.tns)
     if args.env_file:
         given = tuple(opt if opt is not None else val
                       for opt, val in zip(given, load_env_file(args.env_file)))
