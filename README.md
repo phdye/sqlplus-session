@@ -273,6 +273,15 @@ floor rather than the package's, so run it on 3.6 or later:
 cd tests && python3 -m unittest test_sqlrun
 ```
 
+`test_lint.py` runs pyflakes over every `.py` in the checkout and fails
+on anything it reports. It skips, with a reason, where pyflakes is not
+installed:
+
+```
+pip install pyflakes
+cd tests && python3 -m unittest test_lint
+```
+
 The integration suite needs a live sqlplus and a reachable instance. It
 takes credentials the same way the package does — options first, then the
 environment:
