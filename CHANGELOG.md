@@ -3,6 +3,62 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.7.0 — 2026-09-19
+
+`tools/srun.py` runs one SQL*Plus script and prints what sqlplus printed.
+It replaces a shell wrapper that had grown up beside the package and that
+put `$DB_USERNAME/$DB_PASSWORD@$DB_NAME` on the sqlplus command line,
+where `ps`, `/proc/<pid>/cmdline` and any process accounting could read
+it. The credential now goes down the stdin pipe, which is what the
+package was built to do and what the wrapper could not.
+
+Three behaviors are deliberately not the wrapper's.
+
+The tool exits 1 when the output carries an `ORA-`, `TNS-` or `SP2-`
+line. The wrapper exited 0 whatever Oracle said, so a caller checking
+`$?` was told a failed run had succeeded — the same clean-exit-means-
+nothing-there shape the row decoder exists to prevent.
+`--no-fail-on-error` restores it for a caller that reads the output
+itself.
+
+There is no `--password`, only `--password-file` and `$DB_PASSWORD`. A
+path is not a credential; an argument is.
+
+Positional parameters are quoted on the way to the `@` line. The shell
+handed sqlplus its arguments already separated; a pipe is a line of text,
+and `srun.py report.sql 'two words'` would otherwise reach the script as
+two parameters.
+
+Interface: docopt-shaped usage, short bundling (`-qv`), attached values
+(`-w30`), a `--no-` twin for every boolean, `SRUN_*` for every setting
+that is not a credential, `-h`/`-V`/`-v`/`-t`/`-d`/`-q`. Long options do
+not abbreviate; the bundles are expanded before the parser sees them,
+because argparse stops bundling when abbreviation is turned off. The
+Usage block is written by hand and the parser is generated from a table,
+so a test reads the one and compares it against the other — the whole
+cost of emulating docopt rather than depending on it.
+
+Credentials keep the package's variables rather than growing `SRUN_USER`
+and `SRUN_TNS` beside them. Two names for one setting is how they come to
+disagree. One divergence from the older tools: an empty value out of an
+`--env-file` counts as one the file did not set, so `$DB_USERNAME` still
+shows through. The subshell cannot tell unset from empty, and the other
+reading makes a file mentioning none of the three silently select
+external authentication.
+
+### Package
+
+`run_file()` takes `args`, the script's positional parameters, and quotes
+each. An argument containing a double quote is refused: sqlplus has no
+escape for one, and truncating there substitutes a value nobody wrote
+into a statement that then runs.
+
+`errors_in()` is public. A script whose last line is `EXIT` takes sqlplus
+down before the sentinel returns, so its output arrives on `SqlplusDied`
+and never passes the normal scan; a runner deciding an exit code from
+that output should use the session's own patterns rather than keep a
+second copy that can drift.
+
 ## 0.5.1 — 2026-08-14
 
 `setup_commands` entries are terminated when they are SQL and left alone
