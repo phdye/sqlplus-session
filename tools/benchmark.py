@@ -33,7 +33,7 @@ what tells sqlplus_session to go and look.
 
 Benchmark on the RHEL replica, not on primary Cygwin: cygwin1.dll 3.6.9
 adds about 15 ms to every pipe round trip to a native Windows binary,
-which swamps what this measures. See a/handoff/2026-08-14-connect.md.
+which swamps what this measures.
 """
 
 import os

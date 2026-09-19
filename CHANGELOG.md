@@ -76,8 +76,6 @@ error. The first word decides.
 
 ## 0.6.0 — 2026-08-14
 
-Implements `a/issue/2026-08-14-rows-and-schema.md`.
-
 ### Result decoding
 
 `query()` returns lines. Turning them into columns was left to every
