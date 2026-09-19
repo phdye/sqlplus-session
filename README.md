@@ -131,6 +131,12 @@ Constructor parameters:
 - `resolve_credentials(u, p, c)` -- fill in whichever are `None`
 - `load_env_file(path, shell='/bin/sh')` -- source a shell file, return the
   triple
+- `read_password_file(path)` -- the first line, its line ending stripped.
+  The indirection offered in place of a password option, in the package
+  so that two tools cannot disagree about the CRLF a Windows-written file
+  carries
+- `password_file_is_exposed(path)` -- true where group or other can read
+  it; for reporting, never for refusing
 
 ## Rows, not lines
 
@@ -310,12 +316,14 @@ so every skip prints its reason without anyone having to ask for it. A
 count of skipped tests tells you nothing; the reason tells you whether you
 needed a flag, a different schema, or nothing at all.
 
-Timings are not tests. They live in `tools/benchmark.py`:
+Timings are not tests. They live in `sqlplus_session.benchmark`, which is
+run as a module rather than installed — a timing harness has no business
+on anybody's `PATH`:
 
 ```
-tools/benchmark.py --tns orcl -N 50
-tools/benchmark.py --tns orcl --no-baseline --verbose
-tools/benchmark.py --help
+python3 -m sqlplus_session.benchmark --tns orcl -N 50
+python3 -m sqlplus_session.benchmark --tns orcl --no-baseline --verbose
+python3 -m sqlplus_session.benchmark --help
 ```
 
 ## License
