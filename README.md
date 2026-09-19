@@ -224,7 +224,7 @@ Installing the package puts it on the path; from a checkout, without
 installing, `python3 -m sqlplus_session.sqlrun` is the same command.
 
 ```
-pip install sqlplus-session
+pip install sqlplus-session          # or: pip install . from a checkout
 
 sqlrun report.sql 2026-09 HR
 sqlrun --tns orcl --password-file ~/.dbpw -o out.txt report.sql
