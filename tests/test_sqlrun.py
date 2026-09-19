@@ -493,6 +493,27 @@ class TestPackaging(unittest.TestCase):
         with open(sqlrun.__file__) as fh:
             self.assertNotIn('sys.path', fh.read())
 
+    def test_the_build_system_is_declared(self):
+        # Undeclared, an old pip with no wheel installed falls back to
+        # setup.py install: no wheel is built, and recent pip has removed
+        # the fallback outright.
+        with open(os.path.join(ROOT, 'pyproject.toml')) as fh:
+            text = fh.read()
+        self.assertIn('[build-system]', text)
+        self.assertIn('build-backend = "setuptools.build_meta"', text)
+        self.assertIn('"wheel"', text)
+
+    def test_the_metadata_has_one_home(self):
+        # A [project] table would need setuptools 61, which the
+        # interpreter this package supports does not have, and two tables
+        # describing one distribution disagree sooner or later.  Read as
+        # section headers rather than as a substring: the file explains
+        # itself in prose, and the prose names the table it does not use.
+        with open(os.path.join(ROOT, 'pyproject.toml')) as fh:
+            sections = [line.strip() for line in fh
+                        if line.startswith('[')]
+        self.assertEqual(sections, ['[build-system]'])
+
     def test_the_interpreter_floor_is_stated(self):
         self.assertEqual(sqlrun.PYTHON_FLOOR, (3, 6))
         self.assertIn('Python 3.6 or later', sqlrun.__doc__)

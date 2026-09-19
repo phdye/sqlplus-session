@@ -1,6 +1,7 @@
 # setup.py reads README.md at build time, so an sdist without it cannot
 # be built from -- which is a failure nobody sees until someone installs
 # from source rather than from the wheel.
+include pyproject.toml
 include README.md
 include CHANGELOG.md
 include LICENSE

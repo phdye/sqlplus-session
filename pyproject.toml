@@ -1,0 +1,23 @@
+# Declaring the build system is the whole job of this file.
+#
+# Without it pip has to guess, and an old pip guesses badly: with no
+# `wheel` installed it falls back to `setup.py install`, which builds no
+# wheel, is deprecated, and has been removed from recent pip. With it,
+# pip builds a wheel through setuptools' PEP 517 backend whether or not
+# `wheel` happens to be present in the invoking environment.
+#
+# The metadata deliberately stays in setup.py. Expressing it here instead,
+# as a [project] table, needs setuptools 61 or later, and the interpreter
+# this package exists to support carries 41 -- so the modern spelling
+# would make the package unbuildable on its own target. Two tables
+# describing one distribution is the worse failure anyway: they disagree,
+# and the one that loses is whichever the reader happened to open.
+#
+# One consequence, on a machine with no route to PyPI: `pip install .
+# --no-build-isolation` now wants `wheel` in the environment and says
+# `invalid command 'bdist_wheel'` where it is missing. The default,
+# isolated path needs nothing.
+
+[build-system]
+requires = ["setuptools>=40.8.0", "wheel"]
+build-backend = "setuptools.build_meta"
