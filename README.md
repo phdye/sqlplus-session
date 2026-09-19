@@ -212,13 +212,18 @@ All inherit from `SqlplusError`:
 - `SqlplusSchemaError` -- the dictionary could not answer as asked: no such
   table, or no foreign keys to search
 
-## Running a script: tools/srun.py
+## Running a script: the `sqlrun` command
+
+Installing the package puts it on the path; from a checkout, without
+installing, `python3 -m sqlplus_session.sqlrun` is the same command.
 
 ```
-tools/srun.py report.sql 2026-09 HR
-tools/srun.py --tns orcl --password-file ~/.dbpw -o out.txt report.sql
-tools/srun.py --dry-run report.sql 42
-tools/srun.py --help
+pip install sqlplus-session
+
+sqlrun report.sql 2026-09 HR
+sqlrun --tns orcl --password-file ~/.dbpw -o out.txt report.sql
+sqlrun --dry-run report.sql 42
+sqlrun --help
 ```
 
 It runs one SQL*Plus script and prints what sqlplus printed. Everything
@@ -236,10 +241,13 @@ nothing identifying the account reaches the process table at all.
 The tool exits 1 when the output carries an `ORA-`, `TNS-` or `SP2-`
 line. That is the one behavior worth knowing before substituting it for a
 hand-written wrapper, most of which exit 0 whatever Oracle said;
-`--no-fail-on-error` restores that. Options, then `SRUN_*` in the
+`--no-fail-on-error` restores that. Options, then `SQLRUN_*` in the
 environment, then the default; `--help` has the whole interface.
 
-Python 3.6.8 and up, unlike the package, which runs on 3.2.8.
+The command wants Python 3.6.8 and up. The library it calls still runs on
+3.2.8, which is what `python_requires` says, so the distribution installs
+on the older interpreter and the command declines there by name rather
+than failing somewhere inside argparse.
 
 ## Testing
 
@@ -252,11 +260,11 @@ cd tests && python -m unittest test_functionality test_rows
 python -m pytest tests/test_functionality.py tests/test_rows.py -q
 ```
 
-`test_srun.py` is the exception. It covers a tool written to the 3.6
+`test_sqlrun.py` is the exception. It covers a command written to the 3.6
 floor rather than the package's, so run it on 3.6 or later:
 
 ```
-cd tests && python3 -m unittest test_srun
+cd tests && python3 -m unittest test_sqlrun
 ```
 
 The integration suite needs a live sqlplus and a reachable instance. It
