@@ -3,6 +3,40 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.8.0 — 2026-09-19
+
+The script runner becomes part of the distribution rather than a file in
+`tools/`. `sqlplus_session/sqlrun.py` is an ordinary module of the
+package, `sqlrun` is a `console_scripts` entry point, and the three lines
+of `sys.path` surgery that let a file in `tools/` find the package it
+imports are gone — they work from a checkout and fail from a wheel, which
+is the wrong way round for the half that ships.
+
+`srun` was the obvious name and is SLURM's job launcher, present on most
+of the machines that would pip-install anything. `sqlrun` collides with
+nothing. The environment prefix follows the command, so the variables are
+`SQLRUN_SQLPLUS`, `SQLRUN_TIMEOUT` and the rest; the credentials still
+answer to `DB_USERNAME`, `DB_PASSWORD` and `DB_NAME`.
+
+`python_requires` stays at 3.2.8. It describes the library, which is what
+has to run on the client's interpreter, and raising it to satisfy a
+console script would refuse the library to the one platform it was
+written for. The command checks the interpreter itself and says which
+version it wants; the library underneath is unaffected and the message
+says so.
+
+Packaging metadata that a PyPI upload actually needs and did not have:
+`long_description_content_type`, without which the README renders as
+unformatted text, `url`, and a `MANIFEST.in` — `setup.py` reads
+`README.md` at build time, so an sdist lacking it cannot be built from at
+all, which nobody notices until an install falls back from the wheel.
+
+Four tests pin the relocation: the module's own name, the entry point
+naming a callable that exists, the absence of any `sys.path` line, and
+the stated interpreter floor. The suite drives the command as
+`python -m sqlplus_session.sqlrun`, so a checkout is testable without
+being installed.
+
 ## 0.7.0 — 2026-09-19
 
 `tools/srun.py` runs one SQL*Plus script and prints what sqlplus printed.
