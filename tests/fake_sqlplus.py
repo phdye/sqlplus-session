@@ -126,11 +126,26 @@ def main():
             time.sleep(int(m.group(1)))
             continue
 
-        # @file: pretend to run a file.
+        # @file: pretend to run a file.  Real sqlplus splits the rest of
+        # the line into positional parameters and strips one layer of
+        # double quotes, so the echo below is what &1, &2 would hold --
+        # which is the only way a test can see that a parameter with a
+        # space in it survived the trip as one parameter.
         if line.startswith('@'):
             sys.stdout.write('file-output-line-1\n')
             sys.stdout.write('file-output-line-2\n')
+            rest = line[1:]
+            params = [p.strip('"') for p in re.findall(r'"[^"]*"|\S+', rest)]
+            for n, value in enumerate(params[1:], 1):
+                sys.stdout.write('param %d=%s\n' % (n, value))
+            if '__FAKE_ORA_ERROR__' in rest:
+                sys.stdout.write('ORA-00942: table or view does not exist\n')
             sys.stdout.flush()
+            # A script whose last line is EXIT takes sqlplus down with
+            # it, and the sentinel never comes back.  Plenty of real
+            # scripts end that way, so a runner has to survive it.
+            if '__FAKE_EXIT__' in rest:
+                sys.exit(0)
             continue
 
         # / on its own line: PL/SQL block terminator.

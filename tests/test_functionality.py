@@ -33,6 +33,9 @@ FAKE_SQLPLUS = os.path.join(os.path.dirname(__file__), 'fake_sqlplus.py')
 # wrapper that ignores those two arguments and runs the fake.
 _PYTHON = sys.executable
 
+# Invented, and asserted absent from argv by the credential tests below.
+FIXTURE_PASSWORD = 's3kr1t-pw'   # scrub: allow - never a real one
+
 
 def _fake_cmd():
     """Return the sqlplus_cmd string that invokes the fake."""
@@ -192,6 +195,48 @@ class TestRunFile(unittest.TestCase):
         with _make_session(path_converter=converter) as s:
             s.run_file('/tmp/test.sql')
             self.assertEqual(converted, ['/tmp/test.sql'])
+
+    def test_run_file_passes_positional_parameters(self):
+        with _make_session() as s:
+            rows = s.run_file('/tmp/test.sql', ['alpha', '42'])
+        self.assertIn('param 1=alpha', rows)
+        self.assertIn('param 2=42', rows)
+
+    def test_a_parameter_with_a_space_arrives_as_one(self):
+        # Unquoted, sqlplus splits the @ line on whitespace and the
+        # script gets two parameters where the caller passed one.
+        with _make_session() as s:
+            rows = s.run_file('/tmp/test.sql', ['two words'])
+        self.assertIn('param 1=two words', rows)
+
+    def test_no_parameters_leaves_the_line_alone(self):
+        with _make_session() as s:
+            rows = s.run_file('/tmp/test.sql', [])
+        self.assertNotIn('param 1=', '\n'.join(rows))
+
+
+class TestScriptArgQuoting(unittest.TestCase):
+    """What may travel on an @ line, and what is refused."""
+
+    def test_quoted(self):
+        from sqlplus_session.session import _quote_script_arg
+        self.assertEqual(_quote_script_arg('plain'), '"plain"')
+        self.assertEqual(_quote_script_arg('two words'), '"two words"')
+        self.assertEqual(_quote_script_arg(''), '""')
+        self.assertEqual(_quote_script_arg(42), '"42"')
+
+    def test_a_double_quote_is_refused(self):
+        from sqlplus_session.session import _quote_script_arg
+        # sqlplus has no escape for it, so the choice is between
+        # refusing and substituting a value nobody wrote into a
+        # statement that then runs.
+        with self.assertRaises(ValueError):
+            _quote_script_arg('a"b')
+
+    def test_a_newline_is_refused(self):
+        from sqlplus_session.session import _quote_script_arg
+        with self.assertRaises(ValueError):
+            _quote_script_arg('a\nb')
 
 
 class TestErrorHandling(unittest.TestCase):
@@ -640,21 +685,21 @@ class TestCredentialExposure(unittest.TestCase):
             return fh.read()
 
     def test_login_is_nolog_and_argv_holds_no_secret(self):
-        with _make_session(password='s3kr1t-pw', env=self._env()) as s:
+        with _make_session(password=FIXTURE_PASSWORD, env=self._env()) as s:
             s.query('SELECT 1 FROM DUAL')
         argv = self._read(self.argv)
         self.assertIn('/nolog', argv)
-        self.assertNotIn('s3kr1t-pw', argv)
+        self.assertNotIn(FIXTURE_PASSWORD, argv)
         self.assertNotIn('test/', argv)
 
     def test_password_travels_on_stdin(self):
-        with _make_session(password='s3kr1t-pw', env=self._env()):
+        with _make_session(password=FIXTURE_PASSWORD, env=self._env()):
             pass
         seen = self._read(self.seen).splitlines()
-        self.assertIn('CONNECT test/"s3kr1t-pw"@fake', seen)
+        self.assertIn('CONNECT test/"%s"@fake' % FIXTURE_PASSWORD, seen)
         # And nowhere else: one line carries it, and it is not the
         # bare line after CONNECT, which sqlplus would reparse.
-        self.assertNotIn('s3kr1t-pw', seen)
+        self.assertNotIn(FIXTURE_PASSWORD, seen)
 
     def test_password_is_quoted_on_the_connect_line(self):
         # Measured against sqlplus 19c: unquoted, an @ hangs the
@@ -693,10 +738,10 @@ class TestCredentialExposure(unittest.TestCase):
     def test_rejected_login_raises_without_echoing_the_secret(self):
         env = self._env(FAKE_SQLPLUS_BADPW='1')
         with self.assertRaises(SqlplusConnectError) as ctx:
-            _make_session(password='s3kr1t-pw', env=env)
+            _make_session(password=FIXTURE_PASSWORD, env=env)
         msg = str(ctx.exception)
         self.assertIn('ORA-01017', msg)
-        self.assertNotIn('s3kr1t-pw', msg)
+        self.assertNotIn(FIXTURE_PASSWORD, msg)
 
 
 def tearDownModule():

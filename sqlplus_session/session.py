@@ -226,6 +226,31 @@ def _quote_password(password):
     return '"%s"' % password.replace('"', '""')
 
 
+def _quote_script_arg(arg):
+    """Quote one positional parameter for an ``@file`` line.
+
+    A shell hands sqlplus its arguments already separated; this channel
+    is a line of text, so sqlplus splits it again on whitespace and an
+    argument carrying a space arrives as two.  Double quotes hold it
+    together and are stripped before the value reaches ``&1``, so
+    quoting every argument costs nothing and removes the question of
+    which ones needed it.
+
+    There is no escape for a double quote inside one, and no second
+    quoting character either, so an argument containing one is refused.
+    Truncating it at the quote would substitute a value the caller never
+    wrote, into a statement that would then run.
+    """
+    arg = str(arg)
+    if '"' in arg:
+        raise ValueError('script argument cannot contain a double quote: %r'
+                         % (arg,))
+    if '\n' in arg or '\r' in arg:
+        raise ValueError('script argument cannot contain a newline: %r'
+                         % (arg,))
+    return '"%s"' % arg
+
+
 def _apply_linesize(setup_commands, linesize):
     """Settle on a LINESIZE and make the setup list say so.
 
@@ -639,7 +664,7 @@ class SqlplusSession(object):
         from .schema import Schema
         return Schema(self, owner, timeout=timeout)
 
-    def run_file(self, path, timeout=None):
+    def run_file(self, path, args=None, timeout=None):
         """Run a ``.sql`` file via ``@<path>``.
 
         Parameters
@@ -647,6 +672,10 @@ class SqlplusSession(object):
         path : str
             Filesystem path to the SQL file.  Converted via
             *path_converter* if one was supplied at construction.
+        args : sequence of str or None
+            Positional parameters for the script, which reaches them as
+            ``&1``, ``&2`` and so on.  Each is quoted, so one carrying a
+            space stays one parameter.
         timeout : int, float, or None
             Seconds.  ``None`` uses ``self.default_timeout``.
 
@@ -659,7 +688,10 @@ class SqlplusSession(object):
             timeout = self.default_timeout
         if self._path_converter is not None:
             path = self._path_converter(path)
-        lines = self._raw_query('@%s\n' % path, timeout)
+        line = '@%s' % path
+        if args:
+            line += ' ' + ' '.join(_quote_script_arg(a) for a in args)
+        lines = self._raw_query(line + '\n', timeout)
         return self._handle_errors(lines)
 
     def execute(self, sql, timeout=None):
@@ -843,9 +875,21 @@ class SqlplusSession(object):
             self._closed = True
             raise SqlplusDied(self._proc.returncode)
 
+    def errors_in(self, lines):
+        """The members of *lines* this session would call errors.
+
+        Public because a caller sometimes holds output the normal scan
+        never saw.  A script ending in ``EXIT`` takes sqlplus down with
+        it, so its output arrives on :class:`SqlplusDied` rather than as
+        a return value, and a runner deciding an exit code from it
+        should use this session's patterns rather than keep a second
+        copy of them that can disagree.
+        """
+        return [l for l in lines if self._error_re.search(l)]
+
     def _handle_errors(self, lines):
         """Scan *lines* for error patterns; raise or return per policy."""
-        errs = [l for l in lines if self._error_re.search(l)]
+        errs = self.errors_in(lines)
         if errs and self._on_error == 'raise':
             raise SqlplusOraError(errs, lines)
         return lines
