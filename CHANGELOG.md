@@ -3,6 +3,33 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.9.0 — 2026-09-19
+
+The benchmark gets the treatment the runner got, and for the same two
+reasons it was flagged.
+
+`tools/benchmark.py` is now `sqlplus_session/benchmark.py`, without the
+`sys.path` insert that let a file outside the package import it. It is
+run as `python -m sqlplus_session.benchmark` and gets no console script:
+a timing harness has no business on the `PATH` of anyone who installs the
+library, and the module form is a whole interface already. `tools/` is
+empty and gone.
+
+`-p/--password` is gone with it, replaced by `-P/--password-file`. An
+argument is readable by every other user on the box through `ps` and
+lands in shell history besides, and the old option's own help text said
+to prefer `--env-file` — which is an admission rather than a mitigation.
+`-V` joins `--version`, which had only the long spelling.
+
+`read_password_file()` and `password_file_is_exposed()` move out of the
+runner and into the package, exported. Two tools reading the same file
+shape is how they come to disagree about a detail, and the detail here is
+a trailing `\r`: a password file written on the Windows side carries
+CRLF, and the carriage return that survives into the CONNECT line comes
+back from Oracle as a wrong password. One reader, one answer. It raises
+`IOError` like `load_env_file` does, and `sqlrun` translates that into
+its own usage error at the edge where it knows the option's name.
+
 ## 0.8.0 — 2026-09-19
 
 The script runner becomes part of the distribution rather than a file in
