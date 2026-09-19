@@ -3,6 +3,30 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.9.1 — 2026-09-19
+
+`pyproject.toml` declares the build system, which the distribution never
+did. Undeclared, pip guesses, and an old pip with no `wheel` in the
+environment guesses the deprecated way:
+
+    Using legacy 'setup.py install' for sqlplus-session,
+    since package 'wheel' is not installed.
+
+That install works and then stops working, because recent pip has
+removed the fallback. Measured here on pip 21.3.1 against 3.6.9: without
+the file, the legacy path; with it, `Building wheel for sqlplus-session
+(PEP 517)` and a wheel, whether or not `wheel` is installed.
+
+The metadata stays in `setup.py` rather than moving to a `[project]`
+table. That table needs setuptools 61, and the interpreter this package
+exists to support carries 41, so the modern spelling would make the
+package unbuildable on its own target.
+
+One thing the file costs, on a machine with no route to PyPI:
+`pip install . --no-build-isolation` now wants `wheel` present and fails
+with `invalid command 'bdist_wheel'` where it is missing. The default,
+isolated path needs nothing, and the failure names what it wants.
+
 ## 0.9.0 — 2026-09-19
 
 The benchmark gets the treatment the runner got, and for the same two
