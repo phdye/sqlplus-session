@@ -33,6 +33,11 @@ def line(*fields):
 
 class TestProjection(unittest.TestCase):
 
+    def test_cat_returns_a_projection(self):
+        # rows(columns=...) dispatches on the type, so something merely
+        # projection-shaped is refused there rather than here.
+        self.assertIsInstance(cat('a', 'b'), Projection)
+
     def test_width_is_the_number_of_expressions(self):
         self.assertEqual(cat('a').width, 1)
         self.assertEqual(cat('a', 'b', 'c').width, 3)

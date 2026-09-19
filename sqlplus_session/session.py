@@ -36,7 +36,6 @@ Typical usage::
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 

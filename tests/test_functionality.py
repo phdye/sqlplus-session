@@ -7,7 +7,6 @@ the sentinel protocol.
 
 import os
 import sys
-import time
 import unittest
 
 # Ensure the package is importable from the project root.
@@ -326,6 +325,18 @@ class TestTimeout(unittest.TestCase):
             with self.assertRaises(SqlplusTimeout) as ctx:
                 s.query('__FAKE_HANG__')
             self.assertFalse(s.alive)
+        self.assertEqual(ctx.exception.output, [])
+
+    def test_the_partial_output_survives_the_timeout(self):
+        # What sqlplus printed before the deadline is the evidence for
+        # which statement wedged, and a runner writes it out before it
+        # reports the failure.  Two lines here: the first answers, the
+        # second never comes back.
+        with _make_session(default_timeout=1) as s:
+            with self.assertRaises(SqlplusTimeout) as ctx:
+                s.query('SELECT 1 FROM DUAL;\n__FAKE_HANG__')
+            self.assertFalse(s.alive)
+        self.assertIn('1', ''.join(ctx.exception.output))
 
     def test_per_query_timeout_override(self):
         with _make_session(default_timeout=30) as s:
