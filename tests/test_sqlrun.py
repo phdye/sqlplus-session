@@ -1,10 +1,14 @@
-"""Tests for tools/srun.py.  No database, no Oracle, no pytest required.
+"""Tests for the sqlrun command.  No database, no Oracle, no pytest.
 
 Three things are checked here that are easy to get wrong and invisible
 when they are: that the hand-written Usage block and the parser still
 describe the same interface, that a positional parameter starting with a
 dash reaches the script rather than the option parser, and that nothing
 identifying the account reaches the sqlplus command line.
+
+The command is invoked as `python -m sqlplus_session.sqlrun` rather than
+through the installed console script, so that a checkout is testable
+without being installed first.  The two enter at the same callable.
 """
 
 import os
@@ -17,14 +21,12 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-TOOLS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools')
-sys.path.insert(0, os.path.abspath(TOOLS))
-
-import srun                                              # noqa: E402
+from sqlplus_session import sqlrun                       # noqa: E402
 
 FAKE_SQLPLUS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'fake_sqlplus.py')
-SRUN = os.path.join(os.path.abspath(TOOLS), 'srun.py')
+SQLRUN = ['-m', 'sqlplus_session.sqlrun']
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Invented.  One test below asserts neither reaches the command line.
 FIXTURE_PASSWORD = 'tiger'       # scrub: allow - never a real one
@@ -81,17 +83,23 @@ def documented_options(doc):
     return found
 
 
-def run_srun(args, env=None, cwd=None):
+def run_sqlrun(args, env=None, cwd=None):
     """Invoke the tool as a user would.  Returns (rc, stdout, stderr)."""
     environ = dict(os.environ)
     for name in ('DB_USERNAME', 'DB_PASSWORD', 'DB_NAME', 'TWO_TASK',
                  'ORACLE_SID'):
         environ.pop(name, None)
     for name in list(environ):
-        if name.startswith('SRUN_'):
+        if name.startswith('SQLRUN_'):
             del environ[name]
+    # -m resolves the package off sys.path, and a test may run from
+    # anywhere, so the checkout goes on PYTHONPATH rather than being
+    # assumed to be the working directory.
+    environ['PYTHONPATH'] = os.pathsep.join(
+        [ROOT] + ([environ['PYTHONPATH']] if environ.get('PYTHONPATH')
+                  else []))
     environ.update(env or {})
-    proc = subprocess.Popen([sys.executable, SRUN] + list(args),
+    proc = subprocess.Popen([sys.executable] + SQLRUN + list(args),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             universal_newlines=True, env=environ, cwd=cwd)
     out, err = proc.communicate()
@@ -99,7 +107,7 @@ def run_srun(args, env=None, cwd=None):
 
 
 def script_file(text='SELECT 1 FROM DUAL;\n', name='t.sql'):
-    directory = tempfile.mkdtemp(prefix='srun_')
+    directory = tempfile.mkdtemp(prefix='sqlrun_')
     path = os.path.join(directory, name)
     with open(path, 'wb') as fh:
         fh.write(text.encode('utf-8'))
@@ -110,10 +118,10 @@ class TestUsageMatchesParser(unittest.TestCase):
     """The Usage block is the specification; the parser must agree with it."""
 
     def setUp(self):
-        self.documented = documented_options(srun.__doc__)
+        self.documented = documented_options(sqlrun.__doc__)
 
     def test_every_spec_option_is_documented(self):
-        for short, long_, metavar, dest, kind, default in srun._SPEC:
+        for short, long_, metavar, dest, kind, default in sqlrun._SPEC:
             self.assertIn(short, self.documented)
             self.assertIn(long_, self.documented)
             self.assertEqual(self.documented[short], metavar)
@@ -121,7 +129,7 @@ class TestUsageMatchesParser(unittest.TestCase):
 
     def test_every_documented_option_is_in_the_spec(self):
         known = set(['-h', '--help', '-V', '--version'])
-        for short, long_, metavar, dest, kind, default in srun._SPEC:
+        for short, long_, metavar, dest, kind, default in sqlrun._SPEC:
             known.add(short)
             known.add(long_)
             if metavar is None:
@@ -129,21 +137,21 @@ class TestUsageMatchesParser(unittest.TestCase):
         self.assertEqual(set(self.documented) - known, set())
 
     def test_booleans_have_a_negated_twin(self):
-        for short, long_, metavar, dest, kind, default in srun._SPEC:
+        for short, long_, metavar, dest, kind, default in sqlrun._SPEC:
             if metavar is not None:
                 continue
             self.assertIn('--no-' + long_[2:], self.documented)
 
     def test_defaults_are_stated(self):
-        for short, long_, metavar, dest, kind, default in srun._SPEC:
+        for short, long_, metavar, dest, kind, default in sqlrun._SPEC:
             if kind != 'value' or default is None:
                 continue
-            self.assertIn('[default: %s]' % default, srun.__doc__)
+            self.assertIn('[default: %s]' % default, sqlrun.__doc__)
 
     def test_reserved_letters_keep_their_meaning(self):
         reserved = {'-v': 'verbose', '-t': 'terse', '-d': 'debug',
                     '-q': 'quiet'}
-        for short, long_, metavar, dest, kind, default in srun._SPEC:
+        for short, long_, metavar, dest, kind, default in sqlrun._SPEC:
             if short in reserved:
                 self.assertEqual(dest, reserved.pop(short))
         self.assertEqual(reserved, {})
@@ -154,97 +162,100 @@ class TestUsageMatchesParser(unittest.TestCase):
 
 
 class TestSplitArgv(unittest.TestCase):
-    """Where srun's options stop and the script's parameters begin."""
+    """Where sqlrun's options stop and the script's parameters begin."""
 
     def test_plain(self):
-        opts, script, args = srun.split_argv(['-v', 'r.sql', 'a', 'b'])
+        opts, script, args = sqlrun.split_argv(['-v', 'r.sql', 'a', 'b'])
         self.assertEqual((opts, script, args), (['-v'], 'r.sql', ['a', 'b']))
 
     def test_dash_leading_parameter_belongs_to_the_script(self):
-        opts, script, args = srun.split_argv(['r.sql', '-30', '--tns'])
+        opts, script, args = sqlrun.split_argv(['r.sql', '-30', '--tns'])
         self.assertEqual(script, 'r.sql')
         self.assertEqual(args, ['-30', '--tns'])
         self.assertEqual(opts, [])
 
     def test_separate_value(self):
-        opts, script, _ = srun.split_argv(['-T', 'orcl', 'r.sql'])
+        opts, script, _ = sqlrun.split_argv(['-T', 'orcl', 'r.sql'])
         self.assertEqual(opts, ['-T', 'orcl'])
         self.assertEqual(script, 'r.sql')
 
     def test_attached_value(self):
-        opts, script, _ = srun.split_argv(['-Torcl', 'r.sql'])
+        opts, script, _ = sqlrun.split_argv(['-Torcl', 'r.sql'])
         self.assertEqual(opts, ['-T', 'orcl'])
         self.assertEqual(script, 'r.sql')
 
     def test_bundle_of_flags(self):
-        opts, script, _ = srun.split_argv(['-qvv', 'r.sql'])
+        opts, script, _ = sqlrun.split_argv(['-qvv', 'r.sql'])
         self.assertEqual(opts, ['-q', '-v', '-v'])
         self.assertEqual(script, 'r.sql')
 
     def test_bundle_ending_in_a_value(self):
-        opts, script, args = srun.split_argv(['-vw', '30', 'r.sql', 'x'])
+        opts, script, args = sqlrun.split_argv(['-vw', '30', 'r.sql', 'x'])
         self.assertEqual(opts, ['-v', '-w', '30'])
         self.assertEqual((script, args), ('r.sql', ['x']))
 
     def test_bundle_with_the_value_attached(self):
-        opts, script, _ = srun.split_argv(['-vw30', 'r.sql'])
+        opts, script, _ = sqlrun.split_argv(['-vw30', 'r.sql'])
         self.assertEqual(opts, ['-v', '-w', '30'])
         self.assertEqual(script, 'r.sql')
 
     def test_long_with_equals(self):
-        opts, script, _ = srun.split_argv(['--tns=orcl', 'r.sql'])
+        opts, script, _ = sqlrun.split_argv(['--tns=orcl', 'r.sql'])
         self.assertEqual(opts, ['--tns=orcl'])
         self.assertEqual(script, 'r.sql')
 
     def test_double_dash_ends_the_options(self):
-        opts, script, args = srun.split_argv(['-v', '--', '-weird.sql', '-1'])
+        opts, script, args = sqlrun.split_argv(
+            ['-v', '--', '-weird.sql', '-1'])
         self.assertEqual(opts, ['-v'])
         self.assertEqual((script, args), ('-weird.sql', ['-1']))
 
     def test_no_script_at_all(self):
-        self.assertEqual(srun.split_argv(['--help']), (['--help'], None, []))
+        self.assertEqual(sqlrun.split_argv(['--help']), (['--help'], None, []))
 
 
 class TestSettings(unittest.TestCase):
     """Option, then environment variable, then default."""
 
     def test_default(self):
-        self.assertEqual(srun.settings([], {})['sqlplus'], 'sqlplus')
+        self.assertEqual(sqlrun.settings([], {})['sqlplus'], 'sqlplus')
 
     def test_environment_beats_default(self):
-        got = srun.settings([], {'SRUN_SQLPLUS': '/opt/bin/sqlplus'})
+        got = sqlrun.settings([], {'SQLRUN_SQLPLUS': '/opt/bin/sqlplus'})
         self.assertEqual(got['sqlplus'], '/opt/bin/sqlplus')
 
     def test_option_beats_environment(self):
-        got = srun.settings(['-s', 'mine'], {'SRUN_SQLPLUS': '/opt/x'})
+        got = sqlrun.settings(['-s', 'mine'], {'SQLRUN_SQLPLUS': '/opt/x'})
         self.assertEqual(got['sqlplus'], 'mine')
 
     def test_boolean_from_the_environment(self):
-        self.assertFalse(srun.settings([], {'SRUN_FAIL_ON_ERROR': 'no'})
+        self.assertFalse(sqlrun.settings([], {'SQLRUN_FAIL_ON_ERROR': 'no'})
                          ['fail_on_error'])
-        self.assertTrue(srun.settings([], {'SRUN_FAIL_ON_ERROR': 'on'})
+        self.assertTrue(sqlrun.settings([], {'SQLRUN_FAIL_ON_ERROR': 'on'})
                         ['fail_on_error'])
 
     def test_negated_option_overrides_the_environment(self):
-        got = srun.settings(['--no-fail-on-error'],
-                            {'SRUN_FAIL_ON_ERROR': '1'})
+        got = sqlrun.settings(['--no-fail-on-error'],
+                            {'SQLRUN_FAIL_ON_ERROR': '1'})
         self.assertFalse(got['fail_on_error'])
 
     def test_bad_boolean_names_the_variable(self):
-        with self.assertRaises(srun.Usage) as ctx:
-            srun.settings([], {'SRUN_QUIET': 'maybe'})
-        self.assertIn('SRUN_QUIET', str(ctx.exception))
+        with self.assertRaises(sqlrun.Usage) as ctx:
+            sqlrun.settings([], {'SQLRUN_QUIET': 'maybe'})
+        self.assertIn('SQLRUN_QUIET', str(ctx.exception))
 
-    def test_credentials_have_no_srun_variable(self):
-        self.assertIsNone(srun.env_name('user'))
-        self.assertIsNone(srun.env_name('tns'))
-        self.assertEqual(srun.env_name('fail_on_error'), 'SRUN_FAIL_ON_ERROR')
+    def test_credentials_have_no_sqlrun_variable(self):
+        self.assertIsNone(sqlrun.env_name('user'))
+        self.assertIsNone(sqlrun.env_name('tns'))
+        self.assertEqual(sqlrun.env_name('fail_on_error'),
+                         'SQLRUN_FAIL_ON_ERROR')
 
     def test_verbose_counts(self):
-        bundled = srun.split_argv(['-vv', 'r.sql'])[0]
-        self.assertEqual(srun.settings(bundled, {})['verbose'], 2)
-        self.assertEqual(srun.settings([], {'SRUN_VERBOSE': '3'})['verbose'], 3)
-        self.assertEqual(srun.settings([], {'SRUN_VERBOSE': 'yes'})
+        bundled = sqlrun.split_argv(['-vv', 'r.sql'])[0]
+        self.assertEqual(sqlrun.settings(bundled, {})['verbose'], 2)
+        self.assertEqual(sqlrun.settings([], {'SQLRUN_VERBOSE': '3'})
+                         ['verbose'], 3)
+        self.assertEqual(sqlrun.settings([], {'SQLRUN_VERBOSE': 'yes'})
                          ['verbose'], 1)
 
 
@@ -254,66 +265,66 @@ class TestVolume(unittest.TestCase):
         setting = {'quiet': False, 'terse': False, 'verbose': 0,
                    'debug': False}
         setting.update(kw)
-        return srun.volume(setting)
+        return sqlrun.volume(setting)
 
     def test_ladder(self):
-        self.assertEqual(self.level(), srun.NORMAL)
-        self.assertEqual(self.level(quiet=True), srun.QUIET)
-        self.assertEqual(self.level(terse=True), srun.TERSE)
-        self.assertEqual(self.level(verbose=1), srun.VERBOSE)
-        self.assertEqual(self.level(debug=True), srun.DEBUG)
+        self.assertEqual(self.level(), sqlrun.NORMAL)
+        self.assertEqual(self.level(quiet=True), sqlrun.QUIET)
+        self.assertEqual(self.level(terse=True), sqlrun.TERSE)
+        self.assertEqual(self.level(verbose=1), sqlrun.VERBOSE)
+        self.assertEqual(self.level(debug=True), sqlrun.DEBUG)
 
     def test_loudest_wins_within_one_source(self):
-        self.assertEqual(self.level(quiet=True, verbose=1), srun.VERBOSE)
-        self.assertEqual(self.level(verbose=1, debug=True), srun.DEBUG)
+        self.assertEqual(self.level(quiet=True, verbose=1), sqlrun.VERBOSE)
+        self.assertEqual(self.level(verbose=1, debug=True), sqlrun.DEBUG)
 
 
 class TestTimeout(unittest.TestCase):
 
     def test_zero_means_no_practical_limit(self):
-        self.assertEqual(srun.resolve_timeout('0'), srun.NO_TIMEOUT)
+        self.assertEqual(sqlrun.resolve_timeout('0'), sqlrun.NO_TIMEOUT)
 
     def test_a_number(self):
-        self.assertEqual(srun.resolve_timeout('2.5'), 2.5)
+        self.assertEqual(sqlrun.resolve_timeout('2.5'), 2.5)
 
     def test_rubbish_is_a_usage_error(self):
         for bad in ('soon', '-1', ''):
-            with self.assertRaises(srun.Usage):
-                srun.resolve_timeout(bad)
+            with self.assertRaises(sqlrun.Usage):
+                sqlrun.resolve_timeout(bad)
 
 
 class TestPasswordFile(unittest.TestCase):
 
     def write(self, data):
-        fd, path = tempfile.mkstemp(prefix='srun_pw_')
+        fd, path = tempfile.mkstemp(prefix='sqlrun_pw_')
         os.write(fd, data)
         os.close(fd)
         return path
 
     def test_first_line_only(self):
         path = self.write(b'hunter2\nnot this\n')
-        self.assertEqual(srun.read_password_file(path), 'hunter2')
+        self.assertEqual(sqlrun.read_password_file(path), 'hunter2')
 
     def test_crlf_is_stripped(self):
         # A password file written on the Windows side carries CRLF, and
         # a surviving \r comes back as a wrong password.
         path = self.write(b'hunter2\r\n')
-        self.assertEqual(srun.read_password_file(path), 'hunter2')
+        self.assertEqual(sqlrun.read_password_file(path), 'hunter2')
 
     def test_trailing_space_survives(self):
         path = self.write(b'hunter2 \n')
-        self.assertEqual(srun.read_password_file(path), 'hunter2 ')
+        self.assertEqual(sqlrun.read_password_file(path), 'hunter2 ')
 
     def test_missing_file_is_a_usage_error(self):
-        with self.assertRaises(srun.Usage):
-            srun.read_password_file('/no/such/file_xyzzy')
+        with self.assertRaises(sqlrun.Usage):
+            sqlrun.read_password_file('/no/such/file_xyzzy')
 
     def test_exposure_is_noticed(self):
         path = self.write(b'hunter2\n')
         os.chmod(path, 0o600)
-        self.assertFalse(srun.password_file_is_exposed(path))
+        self.assertFalse(sqlrun.password_file_is_exposed(path))
         os.chmod(path, 0o644)
-        self.assertTrue(srun.password_file_is_exposed(path))
+        self.assertTrue(sqlrun.password_file_is_exposed(path))
 
 
 class TestEndToEnd(unittest.TestCase):
@@ -323,7 +334,7 @@ class TestEndToEnd(unittest.TestCase):
         environ = {'DB_USERNAME': 'scott', 'DB_PASSWORD': FIXTURE_PASSWORD,
                    'DB_NAME': 'fake'}
         environ.update(env or {})
-        return run_srun(['--sqlplus', fake_sqlplus_wrapper()] + list(args),
+        return run_sqlrun(['--sqlplus', fake_sqlplus_wrapper()] + list(args),
                         env=environ, cwd=cwd)
 
     def test_output_comes_back(self):
@@ -368,7 +379,7 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_fail_on_error_through_the_environment(self):
         rc, out, err = self.go([script_file(name='__FAKE_ORA_ERROR__.sql')],
-                               env={'SRUN_FAIL_ON_ERROR': '0'})
+                               env={'SQLRUN_FAIL_ON_ERROR': '0'})
         self.assertEqual(rc, 0, err)
 
     def test_a_script_that_exits_is_not_a_failure(self):
@@ -380,7 +391,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn('file-output-line-2', out)
 
     def test_output_to_a_file(self):
-        target = os.path.join(tempfile.mkdtemp(prefix='srun_out_'), 'o.txt')
+        target = os.path.join(tempfile.mkdtemp(prefix='sqlrun_out_'), 'o.txt')
         rc, out, err = self.go(['-o', target, script_file()])
         self.assertEqual(rc, 0, err)
         self.assertEqual(out, '')
@@ -392,7 +403,7 @@ class TestEndToEnd(unittest.TestCase):
     def test_no_credential_reaches_the_command_line(self):
         # The whole reason this tool exists rather than the shell script
         # it replaces, which wrote user/password@tns into argv.
-        seen = os.path.join(tempfile.mkdtemp(prefix='srun_argv_'), 'argv')
+        seen = os.path.join(tempfile.mkdtemp(prefix='sqlrun_argv_'), 'argv')
         rc, out, err = self.go([script_file()],
                                env={'FAKE_SQLPLUS_ARGV': seen})
         self.assertEqual(rc, 0, err)
@@ -408,14 +419,14 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn('cannot read script', err)
 
     def test_no_connect_target(self):
-        rc, out, err = run_srun([script_file()],
+        rc, out, err = run_sqlrun([script_file()],
                                 env={'DB_USERNAME': 'scott'})
         self.assertEqual(rc, 2)
         self.assertIn('No Oracle connect target', err)
         self.assertIn('DB_NAME', err)
 
     def test_terse_drops_the_hint(self):
-        rc, out, err = run_srun(['-t', script_file()],
+        rc, out, err = run_sqlrun(['-t', script_file()],
                                 env={'DB_USERNAME': 'scott'})
         self.assertEqual(rc, 2)
         self.assertIn('No Oracle connect target', err)
@@ -423,7 +434,7 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_dry_run_starts_nothing(self):
         rc, out, err = self.go(['-n', script_file(), 'x'],
-                               env={'SRUN_SQLPLUS': '/no/such/binary_xyzzy'})
+                               env={'SQLRUN_SQLPLUS': '/no/such/binary_xyzzy'})
         self.assertEqual(rc, 0, err)
         self.assertIn('--password--', out)
         self.assertNotIn(FIXTURE_PASSWORD, out)
@@ -444,11 +455,11 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn('file-output-line-1', out)
 
     def test_password_file(self):
-        fd, pw = tempfile.mkstemp(prefix='srun_pw_')
+        fd, pw = tempfile.mkstemp(prefix='sqlrun_pw_')
         os.write(fd, (FILE_PASSWORD + '\n').encode('utf-8'))
         os.close(fd)
         os.chmod(pw, 0o600)
-        seen = os.path.join(tempfile.mkdtemp(prefix='srun_seen_'), 'seen')
+        seen = os.path.join(tempfile.mkdtemp(prefix='sqlrun_seen_'), 'seen')
         rc, out, err = self.go(['-P', pw, script_file()],
                                env={'DB_PASSWORD': FIXTURE_PASSWORD,
                                     'FAKE_SQLPLUS_SEEN': seen})
@@ -471,12 +482,39 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_help_and_version(self):
-        rc, out, err = run_srun(['--help'])
+        rc, out, err = run_sqlrun(['--help'])
         self.assertEqual(rc, 0)
         self.assertIn('Usage:', out)
-        rc, out, err = run_srun(['-V'])
+        rc, out, err = run_sqlrun(['-V'])
         self.assertEqual(rc, 0)
         self.assertIn('sqlplus-session', out)
+
+
+class TestPackaging(unittest.TestCase):
+    """Where the command lives, and what the distribution says about it."""
+
+    def setup_py(self):
+        with open(os.path.join(ROOT, 'setup.py')) as fh:
+            return fh.read()
+
+    def test_the_command_is_a_module_of_the_package(self):
+        self.assertEqual(sqlrun.__name__, 'sqlplus_session.sqlrun')
+
+    def test_the_entry_point_names_a_real_callable(self):
+        self.assertIn("'sqlrun = sqlplus_session.sqlrun:cli'",
+                      self.setup_py())
+        self.assertTrue(callable(sqlrun.cli))
+
+    def test_nothing_manipulates_sys_path(self):
+        # A path insert was how this reached the package while it sat in
+        # tools/.  One surviving here would mean it had been moved and
+        # not rewired, which works from a checkout and fails installed.
+        with open(sqlrun.__file__) as fh:
+            self.assertNotIn('sys.path', fh.read())
+
+    def test_the_interpreter_floor_is_stated(self):
+        self.assertEqual(sqlrun.PYTHON_FLOOR, (3, 6))
+        self.assertIn('Python 3.6 or later', sqlrun.__doc__)
 
 
 if __name__ == '__main__':

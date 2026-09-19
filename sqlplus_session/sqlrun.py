@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
 """Run a SQL*Plus script, with nothing secret on the command line.
 
 Usage:
-  srun.py [options] [--] <script> [<arg>...]
-  srun.py (-h | --help)
-  srun.py (-V | --version)
+  sqlrun [options] [--] <script> [<arg>...]
+  sqlrun (-h | --help)
+  sqlrun (-V | --version)
 
 Arguments:
   <script>  SQL*Plus script to run. Made absolute, and on Cygwin
@@ -62,25 +61,25 @@ Options:
 
 Volume and format are separate axes, and this tool has only the first:
 the script's output is whatever sqlplus printed, reproduced byte for
-byte. -q, -t, -v and -d govern what srun.py itself says about the run,
+byte. -q, -t, -v and -d govern what sqlrun itself says about the run,
 which goes to stderr; the script's output goes to stdout and is not
 touched at any volume.
 
 Environment:
-  Every option above has an environment variable, SRUN_ followed by the
-  long name in upper case with dashes as underscores -- SRUN_SQLPLUS,
-  SRUN_TIMEOUT, SRUN_FAIL_ON_ERROR, SRUN_OUTPUT. A boolean takes 1, true,
-  yes or on for true and 0, false, no or off for false; anything else is
-  a usage error naming the variable.
+  Every option above has an environment variable, SQLRUN_ followed by the
+  long name in upper case with dashes as underscores -- SQLRUN_SQLPLUS,
+  SQLRUN_TIMEOUT, SQLRUN_FAIL_ON_ERROR, SQLRUN_OUTPUT. A boolean takes 1,
+  true, yes or on for true and 0, false, no or off for false; anything
+  else is a usage error naming the variable.
 
   The three credentials are the deliberate exception. Their environment
   channel is the package's own -- $DB_USERNAME, $DB_PASSWORD, and
   $DB_NAME or $TWO_TASK or $ORACLE_SID -- so that every tool here reads
-  one set of names rather than two, and there is no SRUN_USER or
-  SRUN_TNS to disagree with them. $DB_PASSWORD and --password-file are
+  one set of names rather than two, and there is no SQLRUN_USER or
+  SQLRUN_TNS to disagree with them. $DB_PASSWORD and --password-file are
   the only two ways in for a password.
 
-  Precedence for srun.py's own settings is the option, then the
+  Precedence for sqlrun's own settings is the option, then the
   environment variable, then the default. For the credentials it is the
   option, then --env-file, then the environment: a file named on the
   command line is a deliberate act and outranks whatever the calling
@@ -100,6 +99,11 @@ same stdin pipe the script does, so nothing identifying reaches the
 process table. Two other differences are deliberate: the old script
 exited 0 whatever Oracle said, and it echoed its command line when its
 second argument happened to be -v.
+
+Installing the package puts this on the path as `sqlrun`; from a
+checkout, `python3 -m sqlplus_session.sqlrun` is the same thing. It wants
+Python 3.6 or later, where the library underneath it runs on 3.2.8, and
+it says so and stops rather than failing halfway through argparse.
 """
 
 import argparse
@@ -107,23 +111,28 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                '..'))
-
-from sqlplus_session import (            # noqa: E402  (path set above)
-    ENV_CONNECT,
+from . import __version__
+from ._errors import (
     SqlplusConnectError,
     SqlplusDied,
     SqlplusOraError,
-    SqlplusSession,
     SqlplusTimeout,
-    __version__,
+)
+from .session import (
+    ENV_CONNECT,
+    SqlplusSession,
+    _quote_script_arg,
     load_env_file,
     resolve_credentials,
 )
-from sqlplus_session.session import _quote_script_arg   # noqa: E402
 
-PROG = 'SRUN'
+PROG = 'SQLRUN'
+
+#: The floor this module is written to.  The library is 3.2.8, which is
+#: what the client runs, so the check belongs here rather than in the
+#: distribution's python_requires -- refusing to install the library on
+#: the interpreter it was written for would be the wrong repair.
+PYTHON_FLOOR = (3, 6)
 
 # Runtime variables sqlplus needs to find its own shared libraries.
 # Credentials are deliberately not in this list; the package owns those.
@@ -201,11 +210,11 @@ def _takes_value():
 
 
 def split_argv(argv):
-    """Divide *argv* into srun's own options, the script, and its arguments.
+    """Divide *argv* into sqlrun's own options, the script, and its arguments.
 
     argparse cannot do this.  It would read a dash-leading token after
     the script as one of ours, and a SQL*Plus positional parameter is
-    data: `srun.py report.sql -30` asks for thirty of something, not for
+    data: `sqlrun report.sql -30` asks for thirty of something, not for
     an option nobody defined.  So the split happens first, on the rule
     that the first token which is not an option or an option's value is
     the script and everything past it is the script's.
@@ -270,12 +279,12 @@ class _Parser(argparse.ArgumentParser):
 
 
 def build_parser():
-    """A parser for srun's own options, and nothing positional.
+    """A parser for sqlrun's own options, and nothing positional.
 
     The positionals are settled by :func:`split_argv` before this sees
     anything, which is why they are absent here.
     """
-    p = _Parser(prog='srun.py', add_help=False, allow_abbrev=False,
+    p = _Parser(prog='sqlrun', add_help=False, allow_abbrev=False,
                 usage=__doc__)
     for short, long_, metavar, dest, kind, default in _SPEC:
         if kind == 'value':
@@ -302,7 +311,7 @@ def build_parser():
 
 
 def env_name(dest):
-    """``SRUN_FAIL_ON_ERROR`` for ``fail_on_error``, or None where the
+    """``SQLRUN_FAIL_ON_ERROR`` for ``fail_on_error``, or None where the
     setting answers to the package's variables instead."""
     if dest in _NO_ENV_VAR:
         return None
@@ -505,7 +514,7 @@ def describe_connection(user, tns):
 
 
 def at_line(script_path, script_args):
-    """The line srun will send, quoted the way the session quotes it.
+    """The line sqlrun will send, quoted the way the session quotes it.
 
     Built from the package's own quoting rather than a second copy, so
     that --dry-run cannot describe one thing and the run send another.
@@ -612,7 +621,7 @@ def main(argv=None):
         return 0
     if script is None:
         raise Usage('no script given',
-                    'Usage: srun.py [options] <script> [<arg>...]')
+                    'Usage: sqlrun [options] <script> [<arg>...]')
 
     level = volume(setting)
     _LEVEL[0] = level
@@ -668,7 +677,21 @@ def main(argv=None):
 
 
 def cli(argv=None):
-    """main(), with every exit path funnelled through one reporter."""
+    """main(), with every exit path funnelled through one reporter.
+
+    The console script setuptools generates calls this and exits on what
+    it returns.
+    """
+    if sys.version_info < PYTHON_FLOOR:
+        # The distribution installs on 3.2.8, because that is where the
+        # library has to run.  Saying so here beats a TypeError out of
+        # argparse on a keyword it has never heard of.
+        sys.stderr.write(
+            'sqlrun needs Python %d.%d or later; this is %d.%d.%d.\n'
+            % (PYTHON_FLOOR + sys.version_info[:3]))
+        sys.stderr.write('The sqlplus_session library itself runs on '
+                         '3.2.8 and is unaffected.\n')
+        return 1
     debugging = '-d' in (sys.argv if argv is None else argv) \
         or '--debug' in (sys.argv if argv is None else argv)
     try:
