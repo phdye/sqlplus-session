@@ -3,6 +3,37 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.9.2 — 2026-09-19
+
+Four dead names, and a test so the next four are found by something
+other than somebody remembering to look.
+
+Two were litter: `sys` in `session.py` and `time` in
+`tests/test_functionality.py`, imported and never used.
+
+Two were not. `test_query_timeout` bound the exception as `ctx` and then
+asserted nothing about it, and `tests/test_rows.py` imported
+`Projection` for a test nobody wrote. Both are somebody stopping halfway,
+so both are finished rather than deleted. The timeout test now asserts
+that `SqlplusTimeout.output` carries what sqlplus printed before the
+deadline — a documented contract that `sqlrun` leans on when it writes
+the partial output out ahead of the failure, and that nothing checked;
+`cat()` is now pinned to returning a `Projection`, which is what
+`rows(columns=...)` dispatches on.
+
+`tests/test_lint.py` runs pyflakes over every `.py` in the checkout. It
+walks the tree rather than asking git, since an unpacked sdist has no
+`.git` and a check that covers nothing there would report success for
+work it did not do, and it asserts the walk found something before
+believing a clean result. Verified against a planted dead import: it
+fails, and passes again once removed.
+
+It caught itself on its first run. The probe was `import pyflakes` to see
+whether pyflakes was installed, which is an unused import — and the
+`# noqa` on it did nothing, `noqa` being flake8's and pyflakes having
+never read it. The probe now asks the interpreter to run
+`pyflakes --version` instead.
+
 ## 0.9.1 — 2026-09-19
 
 `pyproject.toml` declares the build system, which the distribution never
