@@ -294,37 +294,18 @@ class TestTimeout(unittest.TestCase):
 
 
 class TestPasswordFile(unittest.TestCase):
+    """The reading itself belongs to the package and is tested there.
 
-    def write(self, data):
-        fd, path = tempfile.mkstemp(prefix='sqlrun_pw_')
-        os.write(fd, data)
-        os.close(fd)
-        return path
+    What is sqlrun's is the translation: a file it cannot read is a bad
+    option value, not a failed run, so it leaves by the usage door.
+    """
 
-    def test_first_line_only(self):
-        path = self.write(b'hunter2\nnot this\n')
-        self.assertEqual(sqlrun.read_password_file(path), 'hunter2')
-
-    def test_crlf_is_stripped(self):
-        # A password file written on the Windows side carries CRLF, and
-        # a surviving \r comes back as a wrong password.
-        path = self.write(b'hunter2\r\n')
-        self.assertEqual(sqlrun.read_password_file(path), 'hunter2')
-
-    def test_trailing_space_survives(self):
-        path = self.write(b'hunter2 \n')
-        self.assertEqual(sqlrun.read_password_file(path), 'hunter2 ')
-
-    def test_missing_file_is_a_usage_error(self):
-        with self.assertRaises(sqlrun.Usage):
-            sqlrun.read_password_file('/no/such/file_xyzzy')
-
-    def test_exposure_is_noticed(self):
-        path = self.write(b'hunter2\n')
-        os.chmod(path, 0o600)
-        self.assertFalse(sqlrun.password_file_is_exposed(path))
-        os.chmod(path, 0o644)
-        self.assertTrue(sqlrun.password_file_is_exposed(path))
+    def test_a_missing_file_is_a_usage_error(self):
+        with self.assertRaises(sqlrun.Usage) as ctx:
+            sqlrun.credentials({'password_file': '/no/such/file_xyzzy',
+                                'user': None, 'tns': 'orcl',
+                                'env_file': None})
+        self.assertIn('--password-file', str(ctx.exception))
 
 
 class TestEndToEnd(unittest.TestCase):

@@ -17,6 +17,8 @@ from .session import (
     credentials_from_environment,
     resolve_credentials,
     load_env_file,
+    read_password_file,
+    password_file_is_exposed,
     ENV_USERNAME,
     ENV_PASSWORD,
     ENV_CONNECT,
@@ -45,13 +47,15 @@ from .schema import (
     Schema,
 )
 
-__version__ = '0.8.0'
+__version__ = '0.9.0'
 
 __all__ = [
     'SqlplusSession',
     'credentials_from_environment',
     'resolve_credentials',
     'load_env_file',
+    'read_password_file',
+    'password_file_is_exposed',
     'ENV_USERNAME',
     'ENV_PASSWORD',
     'ENV_CONNECT',

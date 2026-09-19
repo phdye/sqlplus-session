@@ -215,6 +215,47 @@ class TestRunFile(unittest.TestCase):
         self.assertNotIn('param 1=', '\n'.join(rows))
 
 
+class TestPasswordFile(unittest.TestCase):
+    """The indirection every tool here offers in place of an argument."""
+
+    def write(self, data):
+        import tempfile
+        fd, path = tempfile.mkstemp(prefix='sqlplus_pw_')
+        os.write(fd, data)
+        os.close(fd)
+        return path
+
+    def test_first_line_only(self):
+        from sqlplus_session import read_password_file
+        path = self.write(b'hunter2\nnot this\n')
+        self.assertEqual(read_password_file(path), 'hunter2')
+
+    def test_crlf_is_stripped(self):
+        # A password file written on the Windows side carries CRLF, and
+        # a surviving \r comes back from Oracle as a wrong password.
+        from sqlplus_session import read_password_file
+        path = self.write(b'hunter2\r\n')
+        self.assertEqual(read_password_file(path), 'hunter2')
+
+    def test_a_trailing_space_survives(self):
+        from sqlplus_session import read_password_file
+        path = self.write(b'hunter2 \n')
+        self.assertEqual(read_password_file(path), 'hunter2 ')
+
+    def test_a_missing_file_raises_ioerror(self):
+        from sqlplus_session import read_password_file
+        with self.assertRaises(IOError):
+            read_password_file('/no/such/file_xyzzy')
+
+    def test_exposure_is_noticed(self):
+        from sqlplus_session import password_file_is_exposed
+        path = self.write(b'hunter2\n')
+        os.chmod(path, 0o600)
+        self.assertFalse(password_file_is_exposed(path))
+        os.chmod(path, 0o644)
+        self.assertTrue(password_file_is_exposed(path))
+
+
 class TestScriptArgQuoting(unittest.TestCase):
     """What may travel on an @ line, and what is refused."""
 

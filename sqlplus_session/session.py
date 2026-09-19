@@ -59,7 +59,8 @@ from .rows import (
 )
 
 __all__ = ['SqlplusSession', 'credentials_from_environment',
-           'resolve_credentials', 'load_env_file']
+           'resolve_credentials', 'load_env_file', 'read_password_file',
+           'password_file_is_exposed']
 
 # The conventional variables. A caller that passes None for any of the
 # three credential arguments gets the corresponding value from here, so
@@ -204,6 +205,46 @@ def load_env_file(path, shell='/bin/sh'):
     while len(parts) < 3:
         parts.append('')
     return parts[0], parts[1], parts[2]
+
+
+def read_password_file(path):
+    """The first line of *path*, its line ending removed.
+
+    The indirection every tool here offers in place of a password
+    option, and it lives in the package for the same reason the
+    variable names do: two readers of the same file shape eventually
+    disagree about one of the details below.
+
+    Read as bytes and decoded here rather than opened in text mode.  A
+    password file written on the Windows side carries CRLF, and a
+    trailing ``\\r`` that survives into the CONNECT line comes back from
+    Oracle as a wrong password, which is an expensive thing to debug.
+    Only the line ending is stripped; a password may end in a space.
+
+    Raises ``IOError`` when the file cannot be read, as
+    :func:`load_env_file` does, so a caller has one thing to catch.
+    """
+    expanded = os.path.expanduser(path)
+    try:
+        with open(expanded, 'rb') as handle:
+            first = handle.readline()
+    except (IOError, OSError) as exc:
+        raise IOError('cannot read %s: %s' % (path, exc.strerror or exc))
+    return first.decode('utf-8', 'replace').rstrip('\r\n')
+
+
+def password_file_is_exposed(path):
+    """True where the file is readable by group or by other.
+
+    For reporting, never for enforcement.  Refusing to read it would
+    strand whoever is on a filesystem that cannot express the modes, and
+    saying nothing is how a credential stays world-readable for a year.
+    """
+    try:
+        mode = os.stat(os.path.expanduser(path)).st_mode
+    except OSError:
+        return False
+    return bool(mode & 0o044)
 
 
 def _quote_password(password):

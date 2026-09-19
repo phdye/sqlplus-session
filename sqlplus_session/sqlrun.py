@@ -123,6 +123,8 @@ from .session import (
     SqlplusSession,
     _quote_script_arg,
     load_env_file,
+    password_file_is_exposed,
+    read_password_file,
     resolve_credentials,
 )
 
@@ -432,38 +434,6 @@ def source_runtime_vars(env_file, environ=None):
     return env
 
 
-def read_password_file(path):
-    """The first line of *path*, its line ending removed.
-
-    Read as bytes and decoded here rather than opened in text mode: a
-    password file written on Windows carries CRLF, and a trailing \\r
-    that survives into the CONNECT line is rejected by Oracle as a wrong
-    password, which is an expensive thing to debug.  Only the ending is
-    stripped -- a password is allowed to end in a space.
-    """
-    expanded = os.path.expanduser(path)
-    try:
-        with open(expanded, 'rb') as fh:
-            first = fh.readline()
-    except (IOError, OSError) as exc:
-        raise Usage('--password-file %s: %s' % (path, exc.strerror or exc))
-    return first.decode('utf-8', 'replace').rstrip('\r\n')
-
-
-def password_file_is_exposed(path):
-    """True where the file is readable by group or other.
-
-    Reported, never enforced: refusing to read it would strand whoever
-    is on a filesystem that cannot express the modes, and saying nothing
-    is how a credential stays world-readable for a year.
-    """
-    try:
-        mode = os.stat(os.path.expanduser(path)).st_mode
-    except OSError:
-        return False
-    return bool(mode & 0o044)
-
-
 def resolve_timeout(raw):
     """Seconds, with 0 meaning no practical limit."""
     try:
@@ -486,7 +456,10 @@ def credentials(setting):
     """
     password = None
     if setting['password_file']:
-        password = read_password_file(setting['password_file'])
+        try:
+            password = read_password_file(setting['password_file'])
+        except (IOError, OSError) as exc:
+            raise Usage('--password-file: %s' % exc)
     given = (setting['user'], password, setting['tns'])
 
     if setting['env_file']:
