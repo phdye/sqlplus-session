@@ -111,7 +111,14 @@ Constructor parameters:
 
 - `query(sql, timeout=None)` -- run SQL, return output lines
 - `execute(sql, timeout=None)` -- run SQL, discard output
-- `run_file(path, timeout=None)` -- run @file, return output lines
+- `run_file(path, args=None, timeout=None)` -- run @file, return output
+  lines. `args` are the script's positional parameters, reaching it as
+  `&1`, `&2` and so on; each is quoted, so one containing a space stays
+  one parameter. An argument containing a double quote is refused, since
+  sqlplus has no escape for it and truncating at it would substitute a
+  value nobody wrote into a statement that then runs.
+- `errors_in(lines)` -- the lines this session would call errors, for a
+  caller holding output the normal scan never saw
 - `close()` -- shut down the session (idempotent)
 - `alive` -- property, True if sqlplus is still running
 - `SqlplusSession.from_env_file(path, shell='/bin/sh', **kw)` -- classmethod;
@@ -205,6 +212,35 @@ All inherit from `SqlplusError`:
 - `SqlplusSchemaError` -- the dictionary could not answer as asked: no such
   table, or no foreign keys to search
 
+## Running a script: tools/srun.py
+
+```
+tools/srun.py report.sql 2026-09 HR
+tools/srun.py --tns orcl --password-file ~/.dbpw -o out.txt report.sql
+tools/srun.py --dry-run report.sql 42
+tools/srun.py --help
+```
+
+It runs one SQL*Plus script and prints what sqlplus printed. Everything
+after the script is a positional parameter for the script, reaching it as
+`&1`, `&2` and so on, so a parameter beginning with a dash needs no
+escaping.
+
+Credentials come from the package, so the variables are the ones above.
+There is no `--password`: an argument is visible to every other user on
+the box through `ps`, and it lands in shell history besides. Pass
+`--password-file`, or export `DB_PASSWORD`, or use a wallet. sqlplus is
+started as `sqlplus -s /nolog` and authenticated over the pipe, so
+nothing identifying the account reaches the process table at all.
+
+The tool exits 1 when the output carries an `ORA-`, `TNS-` or `SP2-`
+line. That is the one behavior worth knowing before substituting it for a
+hand-written wrapper, most of which exit 0 whatever Oracle said;
+`--no-fail-on-error` restores that. Options, then `SRUN_*` in the
+environment, then the default; `--help` has the whole interface.
+
+Python 3.6.8 and up, unlike the package, which runs on 3.2.8.
+
 ## Testing
 
 Unit tests need no database, no Oracle install, and no pytest — they run
@@ -214,6 +250,13 @@ targets:
 ```
 cd tests && python -m unittest test_functionality test_rows
 python -m pytest tests/test_functionality.py tests/test_rows.py -q
+```
+
+`test_srun.py` is the exception. It covers a tool written to the 3.6
+floor rather than the package's, so run it on 3.6 or later:
+
+```
+cd tests && python3 -m unittest test_srun
 ```
 
 The integration suite needs a live sqlplus and a reachable instance. It
