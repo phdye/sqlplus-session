@@ -417,6 +417,67 @@ class TestTerminateSQL(unittest.TestCase):
         result = SqlplusSession._terminate_sql('SELECT 1 FROM DUAL')
         self.assertTrue(result.endswith('\n'))
 
+    # Each shape below was run against sqlplus 23.26 and Oracle 19c, and
+    # the termination asserted is the one that runs it exactly once.
+
+    def test_select_ending_in_case_end_is_sql(self):
+        # Taken for a PL/SQL block before 0.10.1: ';' then '/', so sqlplus
+        # ran it twice and query() returned every row twice.
+        sql = "SELECT 'r' FROM DUAL GROUP BY CASE WHEN 1 = 1 THEN 0 ELSE 1 END"
+        self.assertEqual(SqlplusSession._terminate_sql(sql), sql + ';\n')
+        self.assertEqual(SqlplusSession._terminate_sql(sql + ';'),
+                         sql + ';\n')
+
+    def test_select_ending_in_case_end_alias_is_sql(self):
+        sql = "SELECT x, CASE WHEN x = 1 THEN 'y' END flag"
+        self.assertNotIn('/', SqlplusSession._terminate_sql(sql))
+
+    def test_a_cte_is_sql(self):
+        sql = "WITH t AS (SELECT 1 c FROM DUAL) SELECT c FROM t"
+        self.assertEqual(SqlplusSession._terminate_sql(sql), sql + ';\n')
+
+    def test_blocks_get_their_semicolon_and_slash(self):
+        for block in ('BEGIN NULL; END', 'BEGIN NULL; END;',
+                      'DECLARE n NUMBER; BEGIN NULL; END',
+                      '<<b>> BEGIN NULL; END b'):
+            body = block if block.endswith(';') else block + ';'
+            self.assertEqual(SqlplusSession._terminate_sql(block),
+                             body + '\n/\n', block)
+
+    def test_a_block_after_comments_is_a_block(self):
+        for block in ('/* note */ BEGIN NULL; END;',
+                      '-- note\nBEGIN NULL; END;',
+                      '  \n-- one\n/* two\nlines */\n declare x number; '
+                      'begin null; end;'):
+            self.assertTrue(SqlplusSession._terminate_sql(block)
+                            .endswith('\n/\n'), block)
+
+    def test_a_comment_mentioning_begin_is_not_a_block(self):
+        sql = "-- BEGIN here\nSELECT 1 FROM DUAL"
+        self.assertEqual(SqlplusSession._terminate_sql(sql), sql + ';\n')
+
+    def test_stored_code_is_a_block(self):
+        for ddl in ('CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END p',
+                    'CREATE FUNCTION f RETURN NUMBER IS BEGIN RETURN 1; END',
+                    'CREATE OR REPLACE EDITIONABLE PACKAGE BODY k AS END k',
+                    'create or replace trigger t before insert on x begin '
+                    'null; end',
+                    'CREATE TYPE t AS OBJECT (n NUMBER);'):
+            self.assertTrue(SqlplusSession._terminate_sql(ddl)
+                            .endswith(';\n/\n'), ddl)
+
+    def test_other_ddl_is_sql(self):
+        for ddl in ('CREATE TABLE t (n NUMBER)', 'CREATE VIEW v AS SELECT 1 '
+                    'x FROM DUAL', 'CREATE INDEX i ON t (n)'):
+            self.assertEqual(SqlplusSession._terminate_sql(ddl), ddl + ';\n')
+
+    def test_with_function_runs_on_the_slash_alone(self):
+        # Inline PL/SQL in a query starts PL/SQL mode; with only ';' it
+        # never ran.  No ';' is added after the query.
+        sql = ("WITH FUNCTION f RETURN NUMBER IS BEGIN RETURN 1; END;\n"
+               "SELECT f FROM DUAL")
+        self.assertEqual(SqlplusSession._terminate_sql(sql), sql + '\n/\n')
+
 
 class TestTerminateSetup(unittest.TestCase):
     """setup_commands: SQL needs a terminator, SQL*Plus commands must not."""
@@ -444,6 +505,21 @@ class TestTerminateSetup(unittest.TestCase):
                          'ALTER SESSION SET A = B;\n')
         self.assertEqual(self.t('BEGIN NULL; END;\n/'),
                          'BEGIN NULL; END;\n/\n')
+
+    def test_set_statements_are_sql(self):
+        # SET TRANSACTION, SET ROLE and SET CONSTRAINT(S) are SQL, and an
+        # unterminated one reached Oracle joined to the probe, ORA-00933.
+        for cmd in ('SET TRANSACTION READ ONLY', 'set role none',
+                    'SET CONSTRAINT c DEFERRED', 'SET CONSTRAINTS ALL IMMEDIATE'):
+            self.assertEqual(self.t(cmd), cmd + ';\n')
+        self.assertEqual(self.t('SET TRANSACTION READ ONLY;'),
+                         'SET TRANSACTION READ ONLY;\n')
+
+    def test_a_block_gets_its_slash(self):
+        # Left at its ';' before 0.10.1, the block sat in the buffer and
+        # the connect timed out.
+        self.assertEqual(self.t('BEGIN NULL; END;'), 'BEGIN NULL; END;\n/\n')
+        self.assertEqual(self.t('BEGIN NULL; END'), 'BEGIN NULL; END;\n/\n')
 
     def test_at_file_is_left_alone(self):
         self.assertEqual(self.t('@login.sql'), '@login.sql\n')

@@ -956,46 +956,87 @@ class SqlplusSession(object):
         VARIABLE WHENEVER XQUERY
     """.split())
 
+    # SET is a SQL*Plus command except where its second word makes it a
+    # SQL statement, which sqlplus buffers like any other.  Measured with
+    # sqlplus 23.26 against Oracle 19c: SET TRANSACTION READ ONLY left
+    # unterminated reaches Oracle joined to the probe query, ORA-00933.
+    _SET_STATEMENTS = frozenset(('TRANSACTION', 'ROLE', 'CONSTRAINT',
+                                 'CONSTRAINTS'))
+
     @classmethod
     def _terminate_setup(cls, cmd):
-        """Terminate *cmd* if it is SQL, leave it alone if it is not.
+        """Terminate *cmd* if it is SQL or PL/SQL, leave it alone if it is a
+        SQL*Plus command.
 
         ``SET PAGESIZE 0;`` is an error, so terminating everything is
-        not an option either.
+        not an option either.  Anything that is not a SQL*Plus command is
+        terminated as :meth:`_terminate_sql` would, so a PL/SQL block gets
+        its ``/`` here too: without it the block sits in the buffer and the
+        connect times out (measured with sqlplus 23.26).
         """
         s = cmd.strip()
         if not s:
             return '\n'
-        if s[-1] in ';/' or s[0] in '@/':
+        if s[0] in '@/':
             return s + '\n'
-        if s.split(None, 1)[0].upper() in cls._SQLPLUS_COMMANDS:
+        words = s.split(None, 2)
+        first = words[0].upper()
+        if first in cls._SQLPLUS_COMMANDS and not (
+                first == 'SET' and len(words) > 1
+                and words[1].upper() in cls._SET_STATEMENTS):
             return s + '\n'
-        return s + ';\n'
+        return cls._terminate_sql(s)
 
-    @staticmethod
-    def _terminate_sql(sql):
+    # How sqlplus decides that input is PL/SQL: by how it starts, not by
+    # how it ends.  In PL/SQL mode a ';' does not end the input and only a
+    # '/' runs it; for anything else a ';' runs it, and a '/' after that
+    # runs the buffer a second time.  Deciding from the ending took any
+    # SELECT whose last clause closed a CASE expression for a block and ran
+    # it twice; measured with sqlplus 23.26 against Oracle 19c, query()
+    # returned every row twice.  WITH FUNCTION, the inline PL/SQL of a
+    # query, starts PL/SQL mode as well, and with only a ';' it never ran.
+    _BLOCK_START = re.compile(r"""
+        (?: DECLARE \b | BEGIN \b | << )
+      | CREATE \s+ (?: OR \s+ REPLACE \s+ )?
+               (?: (?: NON )? EDITIONABLE \s+ )?
+               (?: FUNCTION | PROCEDURE | PACKAGE | TRIGGER | TYPE
+                 | LIBRARY | JAVA ) \b
+      | WITH \s+ (?: FUNCTION | PROCEDURE ) \b
+    """, re.IGNORECASE | re.VERBOSE)
+
+    # Leading comments and blank space, which sqlplus reads past.
+    _LEADING = re.compile(r'(?:\s+|--[^\n]*(?:\n|$)|/\*.*?\*/)*', re.DOTALL)
+
+    # A block's closing END, with or without a label, before any ';'.
+    _ENDS_IN_END = re.compile(r'\bEND\b\s*\w*\s*$', re.IGNORECASE)
+
+    @classmethod
+    def _is_block(cls, text):
+        """Whether sqlplus takes *text* for PL/SQL."""
+        start = cls._LEADING.match(text).end()
+        return bool(cls._BLOCK_START.match(text, start))
+
+    @classmethod
+    def _terminate_sql(cls, sql):
         """Ensure *sql* ends with a statement terminator and newline.
 
-        Plain SQL gets ``;`` if missing.  PL/SQL blocks (ending with
-        ``END;``) or blocks already terminated with ``/`` get ``/``.
+        Plain SQL gets ``;`` if missing.  PL/SQL, decided by how the text
+        starts (:meth:`_is_block`), gets ``/`` on a line of its own, and a
+        block that closes with ``END`` or ``END label`` gets the ``;`` the
+        block needs before it.  Text already ending in ``/`` is left alone.
         """
         s = sql.rstrip()
         if not s:
             return '\n'
 
-        # Already terminated with / (PL/SQL)
         if s.endswith('/'):
             return s + '\n'
 
-        # PL/SQL block: ends with END or END <name>, possibly with ;
-        upper = s.rstrip(';').rstrip()
-        if re.search(r'\bEND\b\s*\w*\s*$', upper, re.IGNORECASE):
-            # Needs / on its own line to execute
-            if not s.endswith(';'):
+        if cls._is_block(s):
+            if not s.endswith(';') and cls._ENDS_IN_END.search(s):
                 s += ';'
             return s + '\n/\n'
 
-        # Plain SQL: needs ;
         if not s.endswith(';'):
             s += ';'
         return s + '\n'

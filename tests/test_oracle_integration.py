@@ -69,6 +69,36 @@ class TestQuery:
         assert 'a b  c' in ''.join(session.query("SELECT 'a b  c' FROM dual"))
 
 
+class TestTermination:
+    """Shapes whose terminator sqlplus decides from how they start."""
+
+    def test_a_query_ending_in_case_end_runs_once(self, session):
+        # Ended in END, this was once taken for a block and given a
+        # trailing slash, which ran it a second time.
+        rows = session.query(
+            "SELECT COUNT(*) FROM dual "
+            "GROUP BY CASE WHEN 1 = 1 THEN 'y' END")
+        assert [r.strip() for r in rows if r.strip()] == ['1']
+
+    def test_with_function_returns_its_value(self, session):
+        rows = session.query(
+            'WITH FUNCTION f RETURN NUMBER IS BEGIN RETURN 7; END;\n'
+            'SELECT f FROM dual')
+        assert [r.strip() for r in rows if r.strip()] == ['7']
+
+    def test_set_transaction_in_setup_connects(self, open_session):
+        from sqlplus_session.session import _DEFAULT_SETUP
+        s = open_session(setup_commands=list(_DEFAULT_SETUP)
+                         + ['SET TRANSACTION READ ONLY'])
+        assert value_of(s.query('SELECT 5 FROM DUAL')) == '5'
+
+    def test_a_block_in_setup_connects(self, open_session):
+        from sqlplus_session.session import _DEFAULT_SETUP
+        s = open_session(setup_commands=list(_DEFAULT_SETUP)
+                         + ['BEGIN NULL; END'])
+        assert value_of(s.query('SELECT 6 FROM DUAL')) == '6'
+
+
 class TestErrors:
 
     def test_missing_table_raises(self, session):

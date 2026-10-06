@@ -100,7 +100,8 @@ Constructor parameters:
 
 - **sqlplus_cmd** -- path to sqlplus binary (default `'sqlplus'`)
 - **env** -- environment dict for the subprocess (must include ORACLE_HOME/PATH)
-- **setup_commands** -- list of SET commands run after connect (sensible defaults provided)
+- **setup_commands** -- list of commands run after connect (sensible defaults
+  provided); see "How statements are terminated" below
 - **connect_timeout** -- seconds to wait for initial connect (default 30)
 - **default_timeout** -- per-query timeout in seconds (default 60)
 - **error_patterns** -- list of regex strings for error detection (default: ORA-/TNS-/SP2-)
@@ -123,6 +124,28 @@ Constructor parameters:
 - `alive` -- property, True if sqlplus is still running
 - `SqlplusSession.from_env_file(path, shell='/bin/sh', **kw)` -- classmethod;
   source a shell file for the credentials and open a session
+
+### How statements are terminated
+
+`query()`, `execute()` and each entry of `setup_commands` may be given
+with or without a terminator; the session adds what sqlplus needs.
+sqlplus decides whether input is PL/SQL by how it starts, not by how it
+ends, and the session follows the same rule:
+
+- Input starting with `DECLARE`, `BEGIN`, a `<<label>>`, `CREATE` of
+  stored code (function, procedure, package, trigger, type, library,
+  Java), or `WITH FUNCTION`/`WITH PROCEDURE` is a block. It is sent with
+  a closing `/` line, and a missing `;` after a final `END` is added.
+  Leading comments are skipped when deciding.
+- Anything else is SQL and gets a `;` only. A query that happens to end
+  in `CASE … END` is SQL, and runs once.
+- Input already ending in `/` is sent as written.
+- In `setup_commands`, sqlplus commands (`SET`, `COLUMN`, `@file` and
+  the rest) are sent bare, except `SET TRANSACTION`, `SET ROLE` and
+  `SET CONSTRAINT(S)`, which are SQL statements and are terminated as
+  such.
+
+Measured with sqlplus 23.26 against Oracle 19c.
 
 ### Module functions
 

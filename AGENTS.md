@@ -144,14 +144,12 @@ and the text that states it names the version measured against.
 
 ## Project state
 
-As of 2026-10-06, `main` is at 0.10.0.
+As of 2026-10-06, `main` is at 0.10.1.
 
-- Two defects are recorded in `a/issue/` and not yet fixed. A SELECT
-  whose last clause ends in `CASE ... END` is taken for a PL/SQL block,
-  so it runs twice and `query()` returns every row twice. `SET
-  TRANSACTION`, `SET ROLE` and `SET CONSTRAINT(S)` in `setup_commands` are
-  taken for SQL*Plus commands and left without a terminator, so the
-  connect fails with ORA-00933.
+- Termination follows how a statement starts (0.10.1). The two defects
+  recorded in `a/issue/` for it, a query ending in `CASE ... END` that
+  ran twice and `SET TRANSACTION`/`ROLE`/`CONSTRAINT(S)` left
+  unterminated in `setup_commands`, are fixed.
 - Administrative connect modes (`AS SYSDBA` and the rest) are proposed
   and built on the `admin-modes` branch, but are not on `main`.
 - Five branches (`admin-modes`, `benchmark-credential`,
