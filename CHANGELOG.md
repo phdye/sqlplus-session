@@ -3,6 +3,27 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.10.1 — 2026-10-06
+
+Statements are terminated the way sqlplus reads them: whether input is
+PL/SQL is decided by how it starts, not by how it ends.
+
+A query ending in `CASE … END` was taken for a block, given a `/`, and
+ran twice, since in SQL mode `;` runs the buffer and the `/` reruns it.
+It now gets a `;` only and runs once. The block test now recognizes
+`DECLARE`, `BEGIN`, a `<<label>>`, `CREATE` of stored code, and
+`WITH FUNCTION`/`WITH PROCEDURE`, after any leading comments. A
+`WITH FUNCTION` query used to time out and now returns.
+
+In `setup_commands`, `SET TRANSACTION`, `SET ROLE` and
+`SET CONSTRAINT(S)` were sent bare, as if they were sqlplus `SET`
+commands, and failed with ORA-00933. They are SQL statements and are
+now terminated as such. A PL/SQL block in `setup_commands` now gets its
+`/`; before, the connect timed out waiting for it.
+
+Measured with sqlplus 23.26 against Oracle 19c; each shape has a unit
+test and an integration test.
+
 ## 0.10.0 — 2026-10-06
 
 The floor is Python 3.6.8, for the library as well as `sqlrun`.
