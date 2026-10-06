@@ -48,20 +48,17 @@ credential variable other than the package's own. History was recreated
 once to make that true. Keep it out of code, tests, documentation and
 commit messages.
 
-**Interpreter floors.** The library declares Python 3.2.8
-(`python_requires` in `setup.py`), and the `sqlrun` command 3.6.
-Library code is written for the older floor:
-
-- `%`-formatting, never f-strings
-- `super(Class, self)`, not bare `super()`; `class Foo(object):`
-- `universal_newlines=True`, not `text=True`
-- `open(os.devnull, 'w')`, not `subprocess.DEVNULL`
-- `t.daemon = True` as an attribute, not a `Thread` keyword
-- `iter(pipe.readline, '')`, not `for line in pipe`, which reads ahead
-  and can deadlock the reader thread
-- `Queue.get(timeout=)` for timeouts, not `selectors`
-
-The 3.2.8 floor is stated, not verified; see "Project state" below.
+**The interpreter floor is Python 3.6.8**, for the library and the
+`sqlrun` command alike. It is stated twice, as `python_requires` in
+`setup.py` and as `PYTHON_FLOOR` in `sqlplus_session/sqlrun.py`, and a
+test holds the two equal. Nothing from 3.7 or later: no `text=` or
+`capture_output=` on `subprocess`, no `dataclasses`, no
+`from __future__ import annotations`. Much of the code was first written
+for 3.2 (`%`-formatting, `super(Class, self)`, `universal_newlines=True`).
+That style is not a defect, and is not rewritten for its own sake. One
+of those choices still matters at any version: the reader thread uses
+`iter(pipe.readline, '')`, not `for line in pipe`, which reads ahead and
+can deadlock it.
 
 ## How it works, in one paragraph
 
@@ -82,7 +79,7 @@ raised or returned according to `on_error`.
 | `sqlplus_session/rows.py` | `cat()`, `Projection`, and decoding lines into rows |
 | `sqlplus_session/schema.py` | Tables, columns and keys read from the data dictionary |
 | `sqlplus_session/_errors.py` | The exception hierarchy, rooted at `SqlplusError` |
-| `sqlplus_session/sqlrun.py` | The `sqlrun` console script (3.6 floor) |
+| `sqlplus_session/sqlrun.py` | The `sqlrun` console script |
 | `sqlplus_session/benchmark.py` | Timings, run with `python3 -m`; deliberately not installed as a script |
 | `tests/` | Unit tests against `tests/fake_sqlplus.py`, and integration suites that need a live instance |
 | `reference/` | `srun.sh`, a one-shot sqlplus wrapper kept for reference; shipped in the sdist |
@@ -114,9 +111,10 @@ Unit tests need no Oracle and no pytest:
     python3 -m unittest test_functionality test_rows test_encoding \
         test_fold test_benchmark test_sqlrun test_lint
 
-Run them on the oldest interpreter available too, leaving out
-`test_sqlrun` below 3.6. `test_lint` runs pyflakes over the tree and
-skips with a reason where pyflakes is not installed.
+Run them on the floor's interpreter too, as close to 3.6.8 as is
+available, since that is where a 3.7-only call fails. `test_lint` runs
+pyflakes over the tree and skips with a reason where pyflakes is not
+installed.
 
 The fake sqlplus models only what it was written to model. A change to
 connecting, termination, error detection or decoding is not verified
@@ -156,10 +154,6 @@ As of 2026-10-06, `main` is at 0.9.2.
   connect fails with ORA-00933.
 - Administrative connect modes (`AS SYSDBA` and the rest) are proposed
   and built on the `admin-modes` branch, but are not on `main`.
-- The 3.2.8 floor has never been checked on a 3.2 interpreter, and
-  `SqlplusSession.__init__` passes `encoding=` and `errors=` to
-  `subprocess.Popen`, which only accepts them from 3.6. Settle this
-  before relying on the floor or repeating it.
 - Five branches (`admin-modes`, `benchmark-credential`,
   `connect-identifier`, `release-handles`, `proposal-0002-part-1`) hold
   work that never reached `main`, including a `doc/` tree with a

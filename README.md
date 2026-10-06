@@ -3,7 +3,7 @@
 Persistent Oracle sqlplus session over stdin/stdout pipes. Connect once,
 run many queries on the same session without per-query connect overhead.
 
-Stdlib only. Python 3.2.8+. No cx_Oracle, no python-oracledb, no
+Stdlib only. Python 3.6.8+. No cx_Oracle, no python-oracledb, no
 third-party dependencies.
 
 ## Quick start
@@ -250,27 +250,18 @@ hand-written wrapper, most of which exit 0 whatever Oracle said;
 `--no-fail-on-error` restores that. Options, then `SQLRUN_*` in the
 environment, then the default; `--help` has the whole interface.
 
-The command wants Python 3.6.8 and up. The library it calls still runs on
-3.2.8, which is what `python_requires` says, so the distribution installs
-on the older interpreter and the command declines there by name rather
-than failing somewhere inside argparse.
+The command wants Python 3.6.8 and up, the same as the library. Run from
+a checkout on anything older, it declines by name rather than failing
+somewhere inside argparse.
 
 ## Testing
 
 Unit tests need no database, no Oracle install, and no pytest — they run
-under plain `unittest` so they also run on the 3.2 interpreter the package
-targets:
+under plain `unittest`, so they run wherever the package does:
 
 ```
-cd tests && python -m unittest test_functionality test_rows
-python -m pytest tests/test_functionality.py tests/test_rows.py -q
-```
-
-`test_sqlrun.py` is the exception. It covers a command written to the 3.6
-floor rather than the package's, so run it on 3.6 or later:
-
-```
-cd tests && python3 -m unittest test_sqlrun
+cd tests && python3 -m unittest test_functionality test_rows test_sqlrun
+python3 -m pytest tests/test_functionality.py tests/test_rows.py -q
 ```
 
 `test_lint.py` runs pyflakes over every `.py` in the checkout and fails

@@ -102,8 +102,9 @@ second argument happened to be -v.
 
 Installing the package puts this on the path as `sqlrun`; from a
 checkout, `python3 -m sqlplus_session.sqlrun` is the same thing. It wants
-Python 3.6 or later, where the library underneath it runs on 3.2.8, and
-it says so and stops rather than failing halfway through argparse.
+Python 3.6.8 or later, as the library does, and run from a checkout on
+anything older it says so and stops rather than failing halfway through
+argparse.
 """
 
 import argparse
@@ -130,11 +131,9 @@ from .session import (
 
 PROG = 'SQLRUN'
 
-#: The floor this module is written to.  The library is 3.2.8, which is
-#: what the client runs, so the check belongs here rather than in the
-#: distribution's python_requires -- refusing to install the library on
-#: the interpreter it was written for would be the wrong repair.
-PYTHON_FLOOR = (3, 6)
+#: The same floor as the distribution's python_requires.  pip enforces
+#: that one on install; this one covers running from a checkout.
+PYTHON_FLOOR = (3, 6, 8)
 
 # Runtime variables sqlplus needs to find its own shared libraries.
 # Credentials are deliberately not in this list; the package owns those.
@@ -656,14 +655,12 @@ def cli(argv=None):
     it returns.
     """
     if sys.version_info < PYTHON_FLOOR:
-        # The distribution installs on 3.2.8, because that is where the
-        # library has to run.  Saying so here beats a TypeError out of
-        # argparse on a keyword it has never heard of.
+        # Reachable only from a checkout, since pip will not install on
+        # less.  Saying so here beats a TypeError out of argparse on a
+        # keyword it has never heard of.
         sys.stderr.write(
-            'sqlrun needs Python %d.%d or later; this is %d.%d.%d.\n'
-            % (PYTHON_FLOOR + sys.version_info[:3]))
-        sys.stderr.write('The sqlplus_session library itself runs on '
-                         '3.2.8 and is unaffected.\n')
+            'sqlrun needs Python %d.%d.%d or later; this is %d.%d.%d.\n'
+            % (PYTHON_FLOOR + tuple(sys.version_info[:3])))
         return 1
     debugging = '-d' in (sys.argv if argv is None else argv) \
         or '--debug' in (sys.argv if argv is None else argv)

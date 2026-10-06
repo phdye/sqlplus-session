@@ -11,6 +11,7 @@ through the installed console script, so that a checkout is testable
 without being installed first.  The two enter at the same callable.
 """
 
+import io
 import os
 import re
 import stat
@@ -515,8 +516,34 @@ class TestPackaging(unittest.TestCase):
         self.assertEqual(sections, ['[build-system]'])
 
     def test_the_interpreter_floor_is_stated(self):
-        self.assertEqual(sqlrun.PYTHON_FLOOR, (3, 6))
-        self.assertIn('Python 3.6 or later', sqlrun.__doc__)
+        self.assertEqual(sqlrun.PYTHON_FLOOR, (3, 6, 8))
+        self.assertIn('Python 3.6.8 or later', sqlrun.__doc__)
+
+    def test_the_command_and_the_distribution_share_a_floor(self):
+        # Two floors is how the distribution came to declare 3.2.8 for
+        # code that needed 3.6.
+        with open(os.path.join(ROOT, 'setup.py')) as fh:
+            m = re.search(r"python_requires='>=([0-9.]+)'", fh.read())
+        self.assertIsNotNone(m)
+        self.assertEqual(tuple(int(n) for n in m.group(1).split('.')),
+                         sqlrun.PYTHON_FLOOR)
+
+    def test_the_command_declines_below_the_floor(self):
+        saved = sqlrun.PYTHON_FLOOR
+        major, minor, micro = sys.version_info[:3]
+        sqlrun.PYTHON_FLOOR = (major, minor, micro + 1)
+        try:
+            err = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
+                rc = sqlrun.cli(['--help'])
+                said = sys.stderr.getvalue()
+            finally:
+                sys.stderr = err
+        finally:
+            sqlrun.PYTHON_FLOOR = saved
+        self.assertEqual(rc, 1)
+        self.assertIn('sqlrun needs Python', said)
 
 
 if __name__ == '__main__':

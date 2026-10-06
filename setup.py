@@ -1,4 +1,4 @@
-"""Minimal setup.py -- stdlib only, Python 3.2.8+."""
+"""Minimal setup.py -- stdlib only, Python 3.6.8+."""
 
 import re
 
@@ -29,11 +29,10 @@ setup(
     author_email='phdye@acm.org',
     license='MIT',
     packages=find_packages(exclude=['tests']),
-    # The library's floor, not the console script's. sqlrun wants 3.6 and
-    # says so when it is run on less; declaring 3.6 here would refuse the
-    # library to the interpreter it was written for, which is the
-    # opposite of the repair.
-    python_requires='>=3.2.8',
+    # One floor for the library and the console script. The library
+    # passes encoding= and errors= to Popen, which arrived in 3.6, so
+    # the 3.2.8 this used to declare was never true.
+    python_requires='>=3.6.8',
     entry_points={
         'console_scripts': [
             'sqlrun = sqlplus_session.sqlrun:cli',
