@@ -144,7 +144,7 @@ and the text that states it names the version measured against.
 
 ## Project state
 
-As of 2026-10-06, `main` is at 0.9.2.
+As of 2026-10-06, `main` is at 0.10.0.
 
 - Two defects are recorded in `a/issue/` and not yet fixed. A SELECT
   whose last clause ends in `CASE ... END` is taken for a PL/SQL block,

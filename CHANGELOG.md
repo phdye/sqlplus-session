@@ -3,6 +3,28 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.10.0 — 2026-10-06
+
+The floor is Python 3.6.8, for the library as well as `sqlrun`.
+
+The distribution declared 3.2.8, and that was never true. `SqlplusSession`
+passes `encoding=` and `errors=` to `subprocess.Popen`, which accepts
+them only from 3.6 and rejects an unknown keyword with a `TypeError`,
+so on 3.2 to 3.5 a session could not open. (Read from the source, not
+run on those interpreters.) The two floors are now one:
+`python_requires` in `setup.py` and `PYTHON_FLOOR` in `sqlrun` both say
+3.6.8. A test holds the two
+equal, since keeping two floors is how the wrong one went unnoticed.
+Checked by planting the old value, which makes the test fail. A second
+test covers `sqlrun` refusing to run below the floor, which is
+reachable only from a checkout now that pip refuses the install.
+
+A minor version, because pip on 3.2 to 3.5 now declines to install the
+package rather than installing one that cannot open a session.
+
+`AGENTS.md` and `CLAUDE.md` are new, for anyone working on the package
+rather than with it.
+
 ## 0.9.2 — 2026-09-19
 
 Four dead names, and a test so the next four are found by something
