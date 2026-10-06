@@ -197,20 +197,20 @@ and never passes the normal scan; a runner deciding an exit code from
 that output should use the session's own patterns rather than keep a
 second copy that can drift.
 
-## 0.5.1 — 2026-08-14
+A statement wider than sqlplus will read is folded. SP2-0027 rejects an
+input line over 4999 characters and ignores it, so a wide projection
+failed at the terminal and never reached Oracle; forty columns are
+enough. The limit is on input and cannot be set. A generated projection
+has no whitespace in it, so commas and the position after `||` are cut
+points too, and quoting is tracked so that no literal is split.
 
-`setup_commands` entries are terminated when they are SQL and left alone
-when they are SQL*Plus commands. An unterminated `ALTER SESSION` sat in
-sqlplus's buffer and swallowed the probe query, so Oracle received
-
-    ALTER SESSION SET NLS_DATE_FORMAT = '...' SELECT 1 FROM DUAL
-
-and answered `ORA-00922: missing or invalid option` — a parse error naming
-a statement the caller never wrote. The default setup list is all SQL*Plus
-commands and never tripped it. One `ALTER SESSION` from a caller does.
-
-Terminating everything is not the alternative: `SET PAGESIZE 0;` is an
-error. The first word decides.
+Output that is not valid UTF-8 no longer kills the session. A single
+byte such as `0xAE` in a column raised `UnicodeDecodeError` in the reader
+thread, the thread died, and every later statement reported a dead
+session rather than the one real fault. The pipe is now opened with
+`encoding='utf-8'` and `errors='replace'`. Both arrived in Python 3.6, so
+from this release the library needed 3.6, while `python_requires` went
+on declaring 3.2.8 until 0.10.0.
 
 ## 0.6.0 — 2026-08-14
 
@@ -316,6 +316,21 @@ decoder exists to prevent: an empty result and a clean exit reading as
 "there was nothing to find". Reporting only — no privilege or environment
 is assumed there.
 
+## 0.5.1 — 2026-08-14
+
+`setup_commands` entries are terminated when they are SQL and left alone
+when they are SQL*Plus commands. An unterminated `ALTER SESSION` sat in
+sqlplus's buffer and swallowed the probe query, so Oracle received
+
+    ALTER SESSION SET NLS_DATE_FORMAT = '...' SELECT 1 FROM DUAL
+
+and answered `ORA-00922: missing or invalid option` — a parse error naming
+a statement the caller never wrote. The default setup list is all SQL*Plus
+commands and never tripped it. One `ALTER SESSION` from a caller does.
+
+Terminating everything is not the alternative: `SET PAGESIZE 0;` is an
+error. The first word decides.
+
 ## 0.5.0 — 2026-08-14
 
 `tests/test_spike_oracle.py` becomes `tests/test_oracle_integration.py`, a
@@ -371,19 +386,30 @@ written.
 
 ## 0.3.0 — 2026-08-13
 
-`load_env_file` hardening: stderr to `os.devnull` rather than an undrained
-pipe, `expanduser` moved in so `~/.dbenv` works through both entry points,
-and the sourcing script composed from `ENV_CONNECT` so the two cannot drift.
-
-## 0.2.0 — 2026-08-13
-
 `DB_USERNAME` / `DB_PASSWORD` / `DB_NAME` become the package's own
 convention. All three constructor arguments default to `None`, meaning ask
 the environment; `''` still means external authentication. `load_env_file`
 and `SqlplusSession.from_env_file` replace the three ad-hoc readers that had
 grown up around the repository.
 
-## 0.1.0 — 2026-08-13
+`load_env_file` hardening: stderr to `os.devnull` rather than an undrained
+pipe, `expanduser` moved in so `~/.dbenv` works through both entry points,
+and the sourcing script composed from `ENV_CONNECT` so the two cannot drift.
+
+## 0.2.0 — 2026-08-13
+
+The password leaves the sqlplus command line. sqlplus starts as
+`sqlplus -s /nolog` and the session authenticates over the stdin pipe it
+already owns, so the credential no longer appears in `ps` or
+`/proc/<pid>/cmdline`. The password went on the line after `CONNECT`, on
+the theory that sqlplus reads its prompt's answer verbatim; 0.4.0 found
+that wrong and moved it onto the `CONNECT` line.
+
+An empty username selects external authentication and issues
+`CONNECT /@tns`. Session setup runs after the connect, so `ALTER SESSION`
+is legal in `setup_commands`.
+
+## 0.1.0 — 2026-07-31
 
 Initial package. `SqlplusSession` over stdin/stdout pipes, numbered sentinel
 protocol, reader thread with per-query timeouts, ORA-/TNS-/SP2- error
