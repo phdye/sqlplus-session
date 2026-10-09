@@ -172,6 +172,42 @@ class TestLifecycle:
         assert not s.alive
 
 
+class TestConnectRetries:
+    """A refused CONNECT is sent again on the same process.
+
+    The refusal comes from an account that does not exist, so no real
+    account's failed-logon count moves; the database still audits it.
+    """
+
+    NO_SUCH_USER = 'sps_no_such_user_xyzzy'
+
+    def _refused(self, credentials, sqlplus_cmd, run_env, retries):
+        from sqlplus_session import SqlplusConnectError
+        connect = credentials[2]
+        with pytest.raises(SqlplusConnectError) as ctx:
+            SqlplusSession(self.NO_SUCH_USER, 'not-a-password', connect,
+                           sqlplus_cmd=sqlplus_cmd, env=run_env,
+                           connect_timeout=30, connect_retries=retries)
+        return str(ctx.value)
+
+    def test_a_refusal_is_retried_once_then_raised(self, credentials,
+                                                   sqlplus_cmd, run_env):
+        msg = self._refused(credentials, sqlplus_cmd, run_env, 1)
+        assert 'ORA-01017' in msg
+        assert '(2 attempts)' in msg
+        assert 'not-a-password' not in msg
+
+    def test_zero_retries_raises_on_the_first(self, credentials,
+                                              sqlplus_cmd, run_env):
+        msg = self._refused(credentials, sqlplus_cmd, run_env, 0)
+        assert 'ORA-01017' in msg
+        assert 'attempts' not in msg
+
+    def test_a_good_logon_takes_one_attempt(self, session):
+        assert session.connect_attempts == 1
+        assert session.connect_refusals == []
+
+
 class TestCredentialExposure:
     """The property the whole connect design exists to provide."""
 

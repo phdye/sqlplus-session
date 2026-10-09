@@ -90,6 +90,36 @@ with SqlplusSession('', '', 'ORCLPDB1') as s:      # wallet
     print(s.query('SELECT user FROM dual'))
 ```
 
+### A refused logon is tried once more
+
+When the server or the network refuses the `CONNECT` -- an `ORA-` or
+`TNS-` error in its reply -- the session sends the same `CONNECT` again on
+the same sqlplus process, two seconds later, and gives up only if that is
+refused too. A refused `CONNECT` leaves sqlplus running and unconnected, and
+the next one is a fresh logon (measured with sqlplus 19.3 against Oracle 19c
+and 23.26). An error sqlplus raises itself (`SP2-`, a line it cannot parse)
+is not retried, since it would be raised again, and neither is a timeout.
+
+| argument | variable | default |
+|---|---|---|
+| `connect_retries` | `SQLPLUS_SESSION_CONNECT_RETRIES` | `1` |
+
+The argument wins, then the variable, then the default; `0` turns retrying
+off. A value that is not a whole number of zero or more raises `ValueError`
+before sqlplus starts, from the variable as from the argument.
+
+The default is one retry, not more, because a refusal is usually a wrong
+credential, and each attempt with one counts against the account's
+failed-logon allowance (`FAILED_LOGIN_ATTEMPTS`: 10 in Oracle's `DEFAULT`
+profile, often fewer where a site sets its own). Raise it only where the
+account can afford it.
+
+After connecting, `session.connect_attempts` says how many attempts it took
+and `session.connect_refusals` holds the error lines of each refusal that was
+retried, so a caller can report a logon that went through only the second
+time. A refusal that persists raises `SqlplusConnectError`, whose message
+says how many attempts were made when there was more than one.
+
 ## API
 
 ### SqlplusSession(username=None, password=None, connect_string=None, ...)
@@ -107,6 +137,9 @@ Constructor parameters:
 - **error_patterns** -- list of regex strings for error detection (default: ORA-/TNS-/SP2-)
 - **on_error** -- `'raise'` (default) or `'return'`
 - **path_converter** -- callable for path conversion (e.g. cygpath on Cygwin)
+- **connect_retries** -- how many times a refused `CONNECT` is sent again
+  (default: `SQLPLUS_SESSION_CONNECT_RETRIES`, else 1); see "A refused logon
+  is tried once more" above
 
 ### Methods
 
@@ -152,6 +185,8 @@ Measured with sqlplus 23.26 against Oracle 19c.
 - `credentials_from_environment()` -- `(username, password, connect_string)`
   from `DB_USERNAME` / `DB_PASSWORD` / `DB_NAME`|`TWO_TASK`|`ORACLE_SID`
 - `resolve_credentials(u, p, c)` -- fill in whichever are `None`
+- `resolve_connect_retries(n=None)` -- the retry count a session would use:
+  *n*, else `SQLPLUS_SESSION_CONNECT_RETRIES`, else 1
 - `load_env_file(path, shell='/bin/sh')` -- source a shell file, return the
   triple
 - `read_password_file(path)` -- the first line, its line ending stripped.

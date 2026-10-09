@@ -33,6 +33,12 @@ Environment:
                           cope with a prompt fragment glued to the
                           head of the next line.
     FAKE_SQLPLUS_BADPW    reject the connect with ORA-01017.
+    FAKE_SQLPLUS_REFUSE_FIRST
+                          reject only the first N connects with
+                          ORA-01017, and accept the rest: a logon
+                          refused once and accepted on the next try.
+    FAKE_SQLPLUS_SP2      reject the connect with SP2-0306 alone, as
+                          sqlplus does a CONNECT line it cannot parse.
 """
 
 import os
@@ -52,6 +58,8 @@ def main():
     # Accept and ignore -s, -L, and the login argument.
     # We just read from stdin and write to stdout.
     _record('FAKE_SQLPLUS_ARGV', '\n'.join(sys.argv[1:]) + '\n')
+    refuse_first = int(os.environ.get('FAKE_SQLPLUS_REFUSE_FIRST') or 0)
+    connects = 0
 
     for line in iter(sys.stdin.readline, ''):
         line = line.rstrip('\r\n')
@@ -90,7 +98,14 @@ def main():
                 # does not do so on a pipe, but the reader has to cope.
                 sys.stdout.write('Enter password: ')
                 sys.stdout.flush()
-            if os.environ.get('FAKE_SQLPLUS_BADPW'):
+            connects += 1
+            if os.environ.get('FAKE_SQLPLUS_SP2'):
+                sys.stdout.write('SP2-0306: Invalid option.\n')
+                sys.stdout.flush()
+            elif (os.environ.get('FAKE_SQLPLUS_BADPW')
+                    or connects <= refuse_first):
+                # Real sqlplus prints this and stays up, unconnected,
+                # reading the next line (measured, sqlplus 19.3).
                 sys.stdout.write('ERROR:\n')
                 sys.stdout.write('ORA-01017: invalid username/password; '
                                  'logon denied\n')

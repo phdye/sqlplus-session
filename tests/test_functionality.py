@@ -872,6 +872,136 @@ class TestCredentialExposure(unittest.TestCase):
         self.assertNotIn(FIXTURE_PASSWORD, msg)
 
 
+class TestConnectRetries(unittest.TestCase):
+    """A refused CONNECT is sent again, once by default."""
+
+    def setUp(self):
+        import tempfile
+        import sqlplus_session.session as _s
+        self._s = _s
+        self._pause = _s._CONNECT_RETRY_PAUSE
+        _s._CONNECT_RETRY_PAUSE = 0
+        self._saved = os.environ.pop(_s.ENV_CONNECT_RETRIES, None)
+        self.dir = tempfile.mkdtemp(prefix='sqlplus_retry_')
+        self.seen = os.path.join(self.dir, 'seen')
+        self.argv = os.path.join(self.dir, 'argv')
+
+    def tearDown(self):
+        import shutil
+        self._s._CONNECT_RETRY_PAUSE = self._pause
+        os.environ.pop(self._s.ENV_CONNECT_RETRIES, None)
+        if self._saved is not None:
+            os.environ[self._s.ENV_CONNECT_RETRIES] = self._saved
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _env(self, **extra):
+        e = dict(os.environ)
+        e['FAKE_SQLPLUS_SEEN'] = self.seen
+        e['FAKE_SQLPLUS_ARGV'] = self.argv
+        e.update(extra)
+        return e
+
+    def _connects(self):
+        if not os.path.exists(self.seen):
+            return 0
+        with open(self.seen) as fh:
+            return sum(1 for l in fh if l.startswith('CONNECT'))
+
+    def test_the_default_is_one_retry(self):
+        self.assertEqual(self._s.DEFAULT_CONNECT_RETRIES, 1)
+        self.assertEqual(self._s.resolve_connect_retries(environ={}), 1)
+
+    def test_a_logon_refused_once_is_retried_and_said(self):
+        env = self._env(FAKE_SQLPLUS_REFUSE_FIRST='1')
+        with _make_session(password=FIXTURE_PASSWORD, env=env) as s:
+            self.assertTrue(s.alive)
+            self.assertEqual(s.connect_attempts, 2)
+            self.assertEqual(len(s.connect_refusals), 1)
+            self.assertTrue(any('ORA-01017' in l
+                                for l in s.connect_refusals[0]))
+            rows = s.query('SELECT 4 FROM DUAL')
+            self.assertIn('4', [r.strip() for r in rows if r.strip()])
+        self.assertEqual(self._connects(), 2)
+
+    def test_a_first_time_logon_reports_one_attempt(self):
+        with _make_session(env=self._env()) as s:
+            self.assertEqual(s.connect_attempts, 1)
+            self.assertEqual(s.connect_refusals, [])
+        self.assertEqual(self._connects(), 1)
+
+    def test_a_refusal_that_persists_is_tried_twice_then_raised(self):
+        env = self._env(FAKE_SQLPLUS_BADPW='1')
+        with self.assertRaises(SqlplusConnectError) as ctx:
+            _make_session(password=FIXTURE_PASSWORD, env=env)
+        msg = str(ctx.exception)
+        self.assertIn('(2 attempts)', msg)
+        self.assertIn('ORA-01017', msg)
+        self.assertNotIn(FIXTURE_PASSWORD, msg)
+        self.assertEqual(self._connects(), 2)
+
+    def test_zero_turns_retrying_off(self):
+        env = self._env(FAKE_SQLPLUS_REFUSE_FIRST='1')
+        with self.assertRaises(SqlplusConnectError) as ctx:
+            _make_session(env=env, connect_retries=0)
+        self.assertNotIn('attempts', str(ctx.exception))
+        self.assertEqual(self._connects(), 1)
+
+    def test_more_retries_when_asked(self):
+        env = self._env(FAKE_SQLPLUS_REFUSE_FIRST='3')
+        with _make_session(env=env, connect_retries=3) as s:
+            self.assertEqual(s.connect_attempts, 4)
+            self.assertEqual(len(s.connect_refusals), 3)
+        self.assertEqual(self._connects(), 4)
+
+    def test_an_sqlplus_error_alone_is_not_retried(self):
+        # SP2- is sqlplus refusing the line; sending it again gets the
+        # same answer.  Only ORA- and TNS- are the server or network.
+        env = self._env(FAKE_SQLPLUS_SP2='1')
+        with self.assertRaises(SqlplusConnectError) as ctx:
+            _make_session(env=env)
+        self.assertIn('SP2-0306', str(ctx.exception))
+        self.assertEqual(self._connects(), 1)
+
+    def test_the_environment_sets_it(self):
+        os.environ[self._s.ENV_CONNECT_RETRIES] = '0'
+        env = self._env(FAKE_SQLPLUS_REFUSE_FIRST='1')
+        with self.assertRaises(SqlplusConnectError):
+            _make_session(env=env)
+        self.assertEqual(self._connects(), 1)
+
+    def test_the_argument_beats_the_environment(self):
+        os.environ[self._s.ENV_CONNECT_RETRIES] = '0'
+        env = self._env(FAKE_SQLPLUS_REFUSE_FIRST='1')
+        with _make_session(env=env, connect_retries=1) as s:
+            self.assertEqual(s.connect_attempts, 2)
+
+    def test_environment_values(self):
+        r = self._s.resolve_connect_retries
+        name = self._s.ENV_CONNECT_RETRIES
+        self.assertEqual(r(environ={name: ''}), 1)
+        self.assertEqual(r(environ={name: ' 2 '}), 2)
+        self.assertEqual(r(environ={name: '0'}), 0)
+        for bad in ('x', '-1', '1.5', 'one'):
+            with self.assertRaises(ValueError):
+                r(environ={name: bad})
+
+    def test_argument_values(self):
+        r = self._s.resolve_connect_retries
+        self.assertEqual(r(0, environ={}), 0)
+        self.assertEqual(r(5, environ={}), 5)
+        with self.assertRaises(ValueError):
+            r(-1)
+        for bad in (True, 1.0, '1'):
+            with self.assertRaises(TypeError):
+                r(bad)
+
+    def test_a_bad_value_is_refused_before_sqlplus_starts(self):
+        os.environ[self._s.ENV_CONNECT_RETRIES] = 'lots'
+        with self.assertRaises(ValueError):
+            _make_session(env=self._env())
+        self.assertFalse(os.path.exists(self.argv))
+
+
 def tearDownModule():
     """Clean up the wrapper script."""
     global _WRAPPER

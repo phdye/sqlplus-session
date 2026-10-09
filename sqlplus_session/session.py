@@ -58,7 +58,8 @@ from .rows import (
 )
 
 __all__ = ['SqlplusSession', 'credentials_from_environment',
-           'resolve_credentials', 'load_env_file', 'read_password_file',
+           'resolve_credentials', 'resolve_connect_retries',
+           'load_env_file', 'read_password_file',
            'password_file_is_exposed']
 
 # The conventional variables. A caller that passes None for any of the
@@ -69,6 +70,27 @@ ENV_USERNAME = 'DB_USERNAME'
 ENV_PASSWORD = 'DB_PASSWORD'
 # DB_NAME first, then the two variables sqlplus itself already honours.
 ENV_CONNECT = ('DB_NAME', 'TWO_TASK', 'ORACLE_SID')
+
+# How many times a refused CONNECT is tried again before the session
+# gives up.  A caller's connect_retries wins, then this variable, then
+# the default.
+ENV_CONNECT_RETRIES = 'SQLPLUS_SESSION_CONNECT_RETRIES'
+
+# One retry, not more.  A refusal is usually a wrong credential, and
+# every attempt with one counts against the account's failed-logon
+# allowance (FAILED_LOGIN_ATTEMPTS, 10 in Oracle's DEFAULT profile, and
+# often fewer where a site sets its own), so the default spends at most
+# one extra.  The case it is for is a logon refused once and accepted
+# on the next try with the same credential.  Measured October 8, 2026
+# against Oracle 23.26 Free on Windows: a wallet connection meant to
+# authenticate as the Windows user was, about once in three hundred and
+# in clusters, judged on the wallet's password instead and refused with
+# ORA-01017, though the client's Windows handshake had succeeded; the
+# next logon went through.
+DEFAULT_CONNECT_RETRIES = 1
+
+# Seconds between a refusal and the retry.
+_CONNECT_RETRY_PAUSE = 2
 
 # Sensible defaults for scripted (non-interactive) use.  Callers can
 # override via the *setup_commands* constructor argument.
@@ -136,6 +158,37 @@ def resolve_credentials(username, password, connect_string):
     return (env_user if username is None else username,
             env_pw if password is None else password,
             env_connect if connect_string is None else connect_string)
+
+
+def resolve_connect_retries(connect_retries=None, environ=None):
+    """How many times a refused CONNECT is retried.
+
+    *connect_retries* when it is given, else ``SQLPLUS_SESSION_CONNECT_
+    RETRIES`` when that is set to anything but an empty string, else
+    :data:`DEFAULT_CONNECT_RETRIES`.  ``0`` turns retrying off.
+
+    A value that is not a whole number of zero or more raises
+    ``ValueError``, from the variable as from the argument: a typo in
+    the environment silently read as the default is a retry policy
+    nobody chose.
+    """
+    if connect_retries is None:
+        environ = os.environ if environ is None else environ
+        raw = (environ.get(ENV_CONNECT_RETRIES) or '').strip()
+        if not raw:
+            return DEFAULT_CONNECT_RETRIES
+        if not re.match(r'^\d+$', raw):
+            raise ValueError('%s must be a whole number of 0 or more, '
+                             'got %r' % (ENV_CONNECT_RETRIES, raw))
+        return int(raw)
+    if not isinstance(connect_retries, int) or isinstance(connect_retries,
+                                                          bool):
+        raise TypeError('connect_retries must be an int, got %r'
+                        % (connect_retries,))
+    if connect_retries < 0:
+        raise ValueError('connect_retries must be 0 or more, got %d'
+                         % connect_retries)
+    return connect_retries
 
 
 def _connect_expansion():
@@ -465,6 +518,20 @@ class SqlplusSession(object):
         ``session.linesize`` reports the value either way, and
         :meth:`rows` uses it to say when a decode failure looks like
         wrapping rather than a bad projection.
+    connect_retries : int or None
+        How many times a refused ``CONNECT`` is sent again, on the same
+        sqlplus process, before the session gives up.  ``None`` takes
+        it from ``SQLPLUS_SESSION_CONNECT_RETRIES``, else 1; ``0``
+        turns retrying off.  Only a refusal carrying an ``ORA-`` or
+        ``TNS-`` code is retried: one sqlplus raises itself (``SP2-``)
+        would be refused again, and a timeout is not a refusal.  Each
+        retry with a wrong credential counts against the account's
+        failed-logon allowance, which is why the default is one.
+
+        ``session.connect_attempts`` says how many it took, and
+        ``session.connect_refusals`` holds the error lines of each
+        refusal that was retried, so a caller can report a logon that
+        succeeded only the second time.
 
     Raises
     ------
@@ -477,7 +544,7 @@ class SqlplusSession(object):
                  sqlplus_cmd='sqlplus', env=None, setup_commands=None,
                  connect_timeout=30, default_timeout=60,
                  error_patterns=None, on_error='raise',
-                 path_converter=None, linesize=None):
+                 path_converter=None, linesize=None, connect_retries=None):
 
         username, password, connect_string = resolve_credentials(
             username, password, connect_string)
@@ -485,6 +552,12 @@ class SqlplusSession(object):
         if on_error not in ('raise', 'return'):
             raise ValueError("on_error must be 'raise' or 'return', "
                              "got %r" % on_error)
+
+        # Settled before sqlplus starts, so a bad value is refused
+        # without a process to clean up.
+        self.connect_retries = resolve_connect_retries(connect_retries)
+        self.connect_attempts = 0
+        self.connect_refusals = []
 
         self.default_timeout = default_timeout
         self._on_error = on_error
@@ -819,28 +892,53 @@ class SqlplusSession(object):
         if username:
             login = '%s/%s' % (username, _quote_password(password or ''))
             if connect_string:
-                self._write('CONNECT %s@%s\n' % (login, connect_string))
+                line = 'CONNECT %s@%s\n' % (login, connect_string)
             else:
-                self._write('CONNECT %s\n' % login)
+                line = 'CONNECT %s\n' % login
         elif connect_string:
             # External authentication: wallet, or OS authentication.
-            self._write('CONNECT /@%s\n' % connect_string)
+            line = 'CONNECT /@%s\n' % connect_string
         else:
-            self._write('CONNECT /\n')
+            line = 'CONNECT /\n'
 
-        lines = self._raw_query('', timeout)
-        if password:
-            # Belt and braces.  ECHO OFF should mean the credential is
-            # never reflected, but an exception raised from here would
-            # otherwise carry whatever did come back.
-            lines = [l.replace(password, '***') for l in lines]
+        # A refused CONNECT leaves sqlplus running and unconnected, and
+        # the next CONNECT on the same process is a fresh logon, so a
+        # retry is the same line sent again.  Measured with sqlplus 19.3
+        # against Oracle 19c and 23.26, October 8, 2026.
+        attempts = self.connect_retries + 1
+        for attempt in range(1, attempts + 1):
+            self.connect_attempts = attempt
+            self._write(line)
+            lines = self._raw_query('', timeout)
+            if password:
+                # Belt and braces.  ECHO OFF should mean the credential
+                # is never reflected, but an exception raised from here
+                # would otherwise carry whatever did come back.
+                lines = [l.replace(password, '***') for l in lines]
 
-        errs = [l for l in lines if self._error_re.search(l)]
-        if errs:
-            self._kill()
-            raise SqlplusConnectError(
-                'sqlplus connect failed: %s' % '; '.join(errs),
-                output=lines)
+            errs = [l for l in lines if self._error_re.search(l)]
+            if not errs:
+                return
+            if attempt == attempts or not self._is_refusal(errs):
+                break
+            self.connect_refusals.append(errs)
+            time.sleep(_CONNECT_RETRY_PAUSE)
+
+        self._kill()
+        tried = (' (%d attempts)' % self.connect_attempts
+                 if self.connect_attempts > 1 else '')
+        raise SqlplusConnectError(
+            'sqlplus connect failed%s: %s' % (tried, '; '.join(errs)),
+            output=lines)
+
+    # The server or the network said no.  An SP2- error alone is sqlplus
+    # rejecting the CONNECT line itself, which it would do again.
+    _REFUSAL_RE = re.compile(r'\b(?:ORA|TNS)-\d{5}\b')
+
+    @classmethod
+    def _is_refusal(cls, errs):
+        """Whether *errs*, from a CONNECT, is worth sending it again for."""
+        return any(cls._REFUSAL_RE.search(l) for l in errs)
 
     def _write(self, text):
         """Write *text* to sqlplus stdin and flush."""
