@@ -144,8 +144,12 @@ and the text that states it names the version measured against.
 
 ## Project state
 
-As of 2026-10-06, `main` is at 0.10.1.
+As of 2026-10-08, `main` is at 0.11.0.
 
+- A refused `CONNECT` is retried on the same process, once by default
+  (0.11.0): `connect_retries`, else `SQLPLUS_SESSION_CONNECT_RETRIES`.
+  Keep the default at one; each retry with a wrong credential spends
+  some of the account's failed-logon allowance.
 - Termination follows how a statement starts (0.10.1). The two defects
   recorded in `a/issue/` for it, a query ending in `CASE ... END` that
   ran twice and `SET TRANSACTION`/`ROLE`/`CONSTRAINT(S)` left

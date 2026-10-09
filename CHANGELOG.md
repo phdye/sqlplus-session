@@ -3,6 +3,37 @@
 Versions are read from `sqlplus_session/__init__.py`; `setup.py` no longer
 carries its own copy.
 
+## 0.11.0 — 2026-10-08
+
+A refused logon is tried once more before the session gives up.
+
+When the reply to `CONNECT` carries an `ORA-` or `TNS-` error, the session
+waits two seconds and sends the same `CONNECT` again on the same sqlplus
+process. A refused `CONNECT` leaves sqlplus running and unconnected, and the
+next one is a fresh logon; measured with sqlplus 19.3 against Oracle 19c and
+23.26. An `SP2-` error alone, sqlplus refusing the line itself, is not
+retried, and neither is a timeout.
+
+The number of retries is `connect_retries`, else
+`SQLPLUS_SESSION_CONNECT_RETRIES`, else 1, and `0` turns retrying off. A
+value that is not a whole number of zero or more raises `ValueError` before
+sqlplus starts. The default is one because a refusal is usually a wrong
+credential, and each attempt with one counts against the account's
+failed-logon allowance, which some sites set low.
+
+The case it is for is a logon refused once and accepted on the next try with
+the same credential. Measured against Oracle 23.26 Free on Windows: a wallet
+connection meant to authenticate as the Windows user (NTS) was, about once in
+three hundred and in clusters, judged on the wallet's password instead and
+refused with ORA-01017, although a client trace shows the Windows handshake
+succeeding as it does on every other attempt. The next attempt went through.
+
+New: `session.connect_attempts`, `session.connect_refusals`,
+`resolve_connect_retries()`, `ENV_CONNECT_RETRIES` and
+`DEFAULT_CONNECT_RETRIES`. A refusal that persists raises
+`SqlplusConnectError` as before; its message now says how many attempts were
+made when there was more than one.
+
 ## 0.10.1 — 2026-10-06
 
 Statements are terminated the way sqlplus reads them: whether input is
